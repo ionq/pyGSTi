@@ -23,13 +23,15 @@ class MCFEDesign(_vb.BenchmarkingDesign):
     ----------
     """
     def __init__(self, circuits_or_edesign, num_mirror_samples=300, num_ref_samples=100,
-                 forward_compilation_fn='original', mirror_compilation_fn='original'):
+                 forward_compilation_fn=None, mirror_compilation_fn=None, mirror_compilation_src='original'):
         if isinstance(circuits_or_edesign, _Circuit):
             base_edesign = _CListDesign([circuits_or_edesign])
         elif not isinstance(circuits_or_edesign, _CListDesign):
             base_edesign = _CListDesign(circuits_or_edesign)
         else:
             base_edesign = circuits_or_edesign
+
+        # TODO: Build circuit mirroring edesign
 
 # TODO: Specific subclasses
 
