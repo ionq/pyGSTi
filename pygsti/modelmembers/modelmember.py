@@ -149,14 +149,20 @@ class ModelMember(ModelChild, _NicelySerializable):
     def state_space(self):
         return self._state_space
 
-    # Need to work on this, since submembers shouldn't necessarily be updated to the same state space -- maybe a
-    # replace_state_space_labels(...) member would be better?
-    #@state_space.setter
-    #def state_space(self, state_space):
-    #    assert(self._state_space.is_compatible_with(state_space), "Cannot change to an incompatible state space!"
-    #    for subm in self.submembers():
-    #        subm.state_space = state_space
-    #    return self._state_space = state_space
+    @state_space.setter
+    def state_space(self, state_space):
+        #assert(self._state_space.is_compatible_with(state_space)), "Cannot change to an incompatible state space!"
+        self._update_submember_state_spaces(self._state_space, state_space)
+        self._state_space = state_space
+
+    def _update_submember_state_spaces(self, old_parent_state_space, new_parent_state_space):
+        """ Subclasses can override this to perform more intelligent updates.
+            This function can also be used to perform any auxiliary tasks, like rebuilding a representation,
+            when the object's state space is updated.
+        """
+        for subm in self.submembers():
+            if subm.state_space == old_parent_state_space:
+                subm.state_space = new_parent_state_space
 
     @property
     def evotype(self):
@@ -283,8 +289,8 @@ class ModelMember(ModelChild, _NicelySerializable):
         This operation is appropriate to do when "re-linking" a parent with
         its children after the parent and child have been serialized.
         (the parent is *not* saved in serialization - see
-         ModelChild.__getstate__ -- and so must be manually re-linked
-         upon de-serialization).
+        ModelChild.__getstate__ -- and so must be manually re-linked
+        upon de-serialization).
 
         In addition to setting the parent of this object, this method
         sets the parent of any objects this object contains (i.e.
@@ -685,7 +691,7 @@ class ModelMember(ModelChild, _NicelySerializable):
         2. The sub-members are all allocated to the *same* parent model.
 
         This method computes an "anticipated parent" model as the common parent of all
-        the submembers (if one exists) or `None`, and calls :method:`allocate_gpindices`
+        the submembers (if one exists) or `None`, and calls :meth:`allocate_gpindices`
         using this parent model and a starting index of 0.  This has the desired behavior
         in the two cases above.  In case 1, parameter indices are set (allocated) but the
         parent is set to `None`, so that the to-be parent model will see this member as
@@ -818,7 +824,7 @@ class ModelMember(ModelChild, _NicelySerializable):
         LindbladErrorgen) should overload this function to account for that.
 
         Parameters
-        ---------
+        ----------
         other: ModelMember
             ModelMember to compare to
         rtol: float
@@ -853,7 +859,7 @@ class ModelMember(ModelChild, _NicelySerializable):
         are the same.
 
         Parameters
-        ---------
+        ----------
         other: ModelMember
             ModelMember to compare to
         rtol: float
@@ -895,7 +901,7 @@ class ModelMember(ModelChild, _NicelySerializable):
         mm_dict: dict
             A dict representation of this ModelMember ready for serialization
             This must have at least the following fields:
-                module, class, submembers, params, state_space, evotype
+            module, class, submembers, params, state_space, evotype
             Additional fields may be added by derived classes.
         """
         mm_dict = OrderedDict()
@@ -942,7 +948,7 @@ class ModelMember(ModelChild, _NicelySerializable):
         """
         For subclasses to implement.  Submember-existence checks are performed,
         and the gpindices of the return value is set, by the non-underscored
-        :method:`from_memoized_dict` implemented in this class.
+        :meth:`from_memoized_dict` implemented in this class.
         """
         #E.g.:
         # assert len(mm_dict['submembers']) == 0, 'ModelMember base class has no submembers'
@@ -958,7 +964,7 @@ class ModelMember(ModelChild, _NicelySerializable):
         mm_dict: dict
             A dict representation of this ModelMember ready for deserialization
             This must have at least the following fields:
-                module, class, submembers, state_space, evotype
+            module, class, submembers, state_space, evotype
 
         serial_memo: dict
             Keys are serialize_ids and values are ModelMembers. This is NOT the same as
