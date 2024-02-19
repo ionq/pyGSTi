@@ -53,7 +53,7 @@ FLOATSIZE = 8  # TODO: better way?
 
 
 def run_lgst(dataset, prep_fiducials, effect_fiducials, target_model, op_labels=None, op_label_aliases=None,
-             guess_model_for_gauge=None, svd_truncate_to=None, verbosity=0):
+             guess_model_for_gauge=None, svd_truncate_to=None, verbosity=0, check=True):
     """
     Performs Linear-inversion Gate Set Tomography on the dataset.
 
@@ -83,7 +83,7 @@ def run_lgst(dataset, prep_fiducials, effect_fiducials, target_model, op_labels=
         Dictionary whose keys are operation label "aliases" and whose values are circuits
         corresponding to what that operation label should be expanded into before querying
         the dataset.  Defaults to the empty dictionary (no aliases defined)
-        e.g. op_label_aliases['Gx^3'] = pygsti.obj.Circuit(['Gx','Gx','Gx'])
+        e.g. op_label_aliases['Gx^3'] = pygsti.baseobjs.Circuit(['Gx','Gx','Gx'])
 
     guess_model_for_gauge : Model, optional
         A model used to compute a gauge transformation that is applied to
@@ -101,6 +101,10 @@ def run_lgst(dataset, prep_fiducials, effect_fiducials, target_model, op_labels=
 
     verbosity : int, optional
         How much detail to send to stdout.
+
+    check : bool, optional
+        Specifies whether we perform computationally expensive assertion checks.
+        Computationally cheap assertions will always be checked.
 
     Returns
     -------
@@ -193,8 +197,8 @@ def run_lgst(dataset, prep_fiducials, effect_fiducials, target_model, op_labels=
                          "or decrease svd_truncate_to" % (rankAB, ABMat_p.shape[0]))
 
     invABMat_p = _np.dot(Pjt, _np.dot(_np.diag(1.0 / s), Pj))  # (trunc,trunc)
-    # check inverse is correct (TODO: comment out later)
-    assert(_np.linalg.norm(_np.linalg.inv(ABMat_p) - invABMat_p) < 1e-8)
+    if check:
+        assert(_np.linalg.norm(_np.linalg.inv(ABMat_p) - invABMat_p) < 1e-8)
     assert(len((_np.isnan(invABMat_p)).nonzero()[0]) == 0)
 
     if svd_truncate_to is None or svd_truncate_to == target_model.dim:  # use target sslbls and basis
@@ -230,10 +234,6 @@ def run_lgst(dataset, prep_fiducials, effect_fiducials, target_model, op_labels=
             #Just a normal gae
             assert(len(X_ps) == 1); X_p = X_ps[0]  # shape (nESpecs, nRhoSpecs)
             lgstModel.operations[opLabel] = _op.FullArbitraryOp(_np.dot(invABMat_p, X_p))  # shape (trunc,trunc)
-
-        #print "DEBUG: X(%s) = \n" % opLabel,X
-        #print "DEBUG: Evals(X) = \n",_np.linalg.eigvals(X)
-        #print "DEBUG: %s = \n" % opLabel,lgstModel[ opLabel ]
 
     #Form POVMs
     for povmLabel in povmLabelsToEstimate:
@@ -444,6 +444,10 @@ def _construct_a(effect_fiducials, model):
     dim = model.dim
     A = _np.empty((n, dim))
     # st = _np.empty(dim, 'd')
+    
+    # Remove restrictions on state param types for computation
+    old_default_param = model.preps.default_param
+    model.preps.default_param = "full"
 
     basis_st = _np.zeros((dim, 1), 'd'); eoff = 0
     for k, (estr, povmLbl, povmLen) in enumerate(zip(effect_fiducials, povmLbls, povmLens)):
@@ -459,6 +463,9 @@ def _construct_a(effect_fiducials, model):
             basis_st[i] = 0.0
 
         eoff += povmLen
+    
+    model.preps.default_param = old_default_param
+
     return A
 
 
@@ -467,6 +474,10 @@ def _construct_b(prep_fiducials, model):
     dim = model.dim
     B = _np.empty((dim, n))
     # st = _np.empty(dim, 'd')
+
+    # Remove restrictions on POVM param types for computation
+    old_default_param = model.povms.default_param
+    model.povms.default_param = "full"
 
     #Create POVM of vector units
     basis_Es = []
@@ -484,6 +495,8 @@ def _construct_b(prep_fiducials, model):
         B[:, k] = [probs[("E%d" % i,)] for i in range(dim)]  # CHECK will this work?
 
     del model.povms['M_LGST_tmp_povm']
+    model.povms.default_param = old_default_param
+
     return B
 
 
@@ -856,7 +869,23 @@ def iterative_gst_generator(dataset, start_model, circuit_lists,
         ret = ()
         for artype, cnt in max_cnts.items(): ret += (artype,) * cnt
         return ret
-
+   
+    #These lines were previously in the loop below, but we should be able to move it out from there so we can use it
+    #in precomputing layouts:
+    method_names = optimizer.called_objective_methods
+    array_types = optimizer.array_types + \
+                _max_array_types([builder.compute_array_types(method_names, mdl.sim)
+                                  for builder in iteration_objfn_builders + final_objfn_builders])
+    
+    #precompute the COPA layouts. During the layout construction there are memory availability checks,
+    #So by doing it this way we should be able to reduce the number of instances of running out of memory before the end.
+    #The ModelDatasetCircuitsStore
+    printer.log('Precomputing CircuitOutcomeProbabilityArray layouts for each iteration.', 2)
+    precomp_layouts = []
+    for i, circuit_list in enumerate(circuit_lists):
+        printer.log(f'Layout for iteration {i}', 2)
+        precomp_layouts.append(mdl.sim.create_layout(circuit_list, dataset, resource_alloc, array_types, verbosity= printer - 1))
+    
     with printer.progress_logging(1):
         for i in range(starting_index, len(circuit_lists)):
             circuitsToEstimate = circuit_lists[i]
@@ -871,12 +900,9 @@ def iterative_gst_generator(dataset, start_model, circuit_lists,
             if circuitsToEstimate is None or len(circuitsToEstimate) == 0: continue
 
             mdl.basis = start_model.basis  # set basis in case of CPTP constraints (needed?)
-            method_names = optimizer.called_objective_methods
-            array_types = optimizer.array_types + \
-                _max_array_types([builder.compute_array_types(method_names, mdl.sim)
-                                  for builder in iteration_objfn_builders + final_objfn_builders])
             initial_mdc_store = _objfns.ModelDatasetCircuitsStore(mdl, dataset, circuitsToEstimate, resource_alloc,
-                                                                  array_types=array_types, verbosity=printer - 1)
+                                                                  array_types=array_types, verbosity=printer - 1, 
+                                                                  precomp_layout = precomp_layouts[i])
             mdc_store = initial_mdc_store
 
             for j, obj_fn_builder in enumerate(iteration_objfn_builders):
