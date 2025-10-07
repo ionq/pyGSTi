@@ -1,5 +1,7 @@
 import os
 import psutil
+import pytest
+import sys
 
 import pygsti
 from pygsti.modelpacks import smq1Q_XY
@@ -11,8 +13,8 @@ class LogLTestCase(BaseTestCase):
     def test_memory(self):
 
         model = smq1Q_XY.target_model()
-        model = model.depolarize(spam_noise = .01, op_noise = .001)
-        model = model.rotate(max_rotate=.005, seed=1234)
+        model = model.depolarize(spam_noise = 0.01, op_noise = 0.001)
+        model = model.rotate(max_rotate=0.005, seed=1234)
 
         prep_fiducials = smq1Q_XY.prep_fiducials()
         meas_fiducials = smq1Q_XY.meas_fiducials()
@@ -83,5 +85,5 @@ class LogLTestCase(BaseTestCase):
                                     poisson_picture=True, comm=comm)
 
             print(L)
-        except ImportError:
+        except (ImportError, RuntimeError):
             self.skipTest('Skipping because failed to import MPI')

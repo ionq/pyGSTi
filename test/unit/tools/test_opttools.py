@@ -45,12 +45,12 @@ class TestTimedBlock(BaseCase):
 
     def test_timer(self):
 
-        duration = .5
+        duration = 0.5
         timeDict = {}
         with opt.timed_block('time', timeDict):
             sleep(duration)
-
-        self.assertGreaterEqual(timeDict['time'], duration)
+        lt_tol = 1e-3
+        self.assertGreaterEqual(timeDict['time'], duration-lt_tol) #sometimes sleeps lasts slightly less than specified duration.
         tolerance = 0.2  # this should deliberately be large, for repeatability
         self.assertLessEqual(timeDict['time'], duration + tolerance, "timed block result is greater than {} seconds off".format(tolerance))
 

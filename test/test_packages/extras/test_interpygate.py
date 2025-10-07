@@ -3,7 +3,7 @@ from scipy.linalg import expm as _expm
 
 import pygsti
 from pygsti.extras import interpygate as interp
-from pygsti.extras.interpygate.process_tomography import run_process_tomography, vec, unvec
+from pygsti.extras.interpygate.process_tomography import run_process_tomography, unvec_square
 from pygsti.tools import change_basis
 from ..testutils import BaseTestCase
 
@@ -12,7 +12,7 @@ try:
     _comm = MPI.COMM_WORLD
     _rank = _comm.Get_rank()
     _size = _comm.Get_size()
-except ImportError:
+except ImportError: # Reverted RuntimeError to cause Windows runners to break
     _comm = None
     _rank = 0
     _size = 1
@@ -51,7 +51,7 @@ class ExampleProcess(interp.PhysicalProcess):
         L = dephasing * self.dephasing_generator + decoherence * self.decoherence_generator
 
         process = change_basis(_expm((H + L) * t), 'pp', 'col')
-        state = unvec(_np.dot(process, vec(_np.outer(state, state.conj()))))
+        state = unvec_square(_np.dot(process, _np.outer(state, state.conj()).ravel(order='F')), 'F')
         return state
 
     def create_process_matrix(self, v, comm=None):
@@ -102,7 +102,7 @@ class ExampleProcess_timedep(interp.PhysicalProcess):
         L = dephasing * self.dephasing_generator + decoherence * self.decoherence_generator
 
         processes = [change_basis(_expm((H + L) * t), 'pp', 'col') for t in times]
-        states = [unvec(_np.dot(process, vec(_np.outer(state, state.conj())))) for process in processes]
+        states = [unvec_square(_np.dot(process, _np.outer(state, state.conj()).ravel(order='F')),'F') for process in processes]
 
         return states
 
@@ -136,11 +136,11 @@ class InterpygateTestCase(BaseTestCase):
             target_op = _comm.bcast(None, root=0)
 
         param_ranges = ([(0.9, 1.1, 2),  # omega
-                         (-.1, 0, 2),   # phase
-                         (-.2, -.1, 2),   # detuning
+                         (-0.1, 0, 2),   # phase
+                         (-0.2, -0.1, 2),   # detuning
                          (0, 0.1, 2),    # dephasing
                          (0.1, 0.2, 2),    # decoherence
-                         _np.linspace(_np.pi / 2, _np.pi / 2 + .5, 10)  # time
+                         _np.linspace(_np.pi / 2, _np.pi / 2 + 0.5, 10)  # time
                         ])
         interp_op = interp.InterpolatedDenseOp.create_by_interpolating_physical_process(
             target_op, example_process, param_ranges, comm=_comm,
@@ -177,12 +177,12 @@ class InterpygateTestCase(BaseTestCase):
                 mx = self.process.create_process_matrices(_np.array([omega, 0.0, 0.0, 0.0, 0.0]), [[t]], comm=None)[0]
                 return pygsti.modelmembers.operations.StaticArbitraryOp(mx)
 
-        arg_ranges = [_np.linspace(_np.pi / 2, _np.pi / 2 + .5, 10),  # time
+        arg_ranges = [_np.linspace(_np.pi / 2, _np.pi / 2 + 0.5, 10),  # time
                       (0.9, 1.1, 2)  # omega
                       ]
 
-        param_ranges = [(-.1, .1, 2),  # phase
-                        (-.1, .1, 2),  # detuning
+        param_ranges = [(-0.1, 0.1, 2),  # phase
+                        (-0.1, 0.1, 2),  # detuning
                         (0, 0.1, 2),   # dephasing
                         (0, 0.1, 2)    # decoherence
                         ]
@@ -227,11 +227,11 @@ class InterpygateTestCase(BaseTestCase):
             target_op = _comm.bcast(None, root=0)
 
         param_ranges = ([(0.9, 1.1, 2),  # omega
-                         (-.1, 0, 2),   # phase
-                         (-.2, -.1, 2),   # detuning
+                         (-0.1, 0, 2),   # phase
+                         (-0.2, -0.1, 2),   # detuning
                          (0, 0.1, 2),    # dephasing
                          (0.1, 0.2, 2),    # decoherence
-                         _np.linspace(_np.pi / 2, _np.pi / 2 + .5, 10)  # time
+                         _np.linspace(_np.pi / 2, _np.pi / 2 + 0.5, 10)  # time
                          ])
         interp_op = interp.InterpolatedDenseOp.create_by_interpolating_physical_process(
             target_op, example_process, param_ranges, comm=_comm,
@@ -268,12 +268,12 @@ class InterpygateTestCase(BaseTestCase):
                 mx = self.process.create_process_matrix(_np.array([omega, 0.0, 0.0, 0.0, 0.0, t]), comm=None)
                 return pygsti.modelmembers.operations.StaticArbitraryOp(mx)
 
-        arg_ranges = [_np.linspace(_np.pi / 2, _np.pi / 2 + .5, 10),  # time
+        arg_ranges = [_np.linspace(_np.pi / 2, _np.pi / 2 + 0.5, 10),  # time
                       (0.9, 1.1, 2)  # omega
                       ]
 
-        param_ranges = [(-.1, .1, 2),  # phase
-                        (-.1, .1, 2),  # detuning
+        param_ranges = [(-0.1, 0.1, 2),  # phase
+                        (-0.1, 0.1, 2),  # detuning
                         (0, 0.1, 2),   # dephasing
                         (0, 0.1, 2)    # decoherence
                         ]
@@ -310,7 +310,7 @@ class InterpygateTestCase(BaseTestCase):
         sigX = _np.array([[0, 1], [1, 0]], dtype='complex')
         sigY = _np.array([[0, -1.j], [1.j, 0]], dtype='complex')
         sigZ = _np.array([[1, 0], [0, -1]], dtype='complex')
-        theta = .32723
+        theta = 0.32723
         u = _np.cos(theta) * sigI + 1.j * _np.sin(theta) * sigX
         v = _np.sin(theta) * sigI - 1.j * _np.cos(theta) * sigX
 
@@ -318,12 +318,13 @@ class InterpygateTestCase(BaseTestCase):
         test_process = _np.kron(U.conj().T, U)
 
         def single_time_test_function(pure_state, test_process=test_process):
-            rho = vec(_np.outer(pure_state, pure_state.conj()))
-            return unvec(_np.dot(test_process, rho))
+            rho = _np.outer(pure_state, pure_state.conj()).ravel(order='F')
+            return unvec_square(_np.dot(test_process, rho),'F')
 
         def multi_time_test_function(pure_state, test_process=test_process):
-            rho = vec(_np.outer(pure_state, pure_state.conj()))
-            return [unvec(_np.dot(test_process, rho)), unvec(_np.dot(_np.linalg.matrix_power(test_process, 2), rho))]
+            rho = _np.outer(pure_state, pure_state.conj()).ravel(order='F')
+            temp = _np.dot(_np.linalg.matrix_power(test_process, 2), rho)
+            return [unvec_square(_np.dot(test_process, rho), 'F'), unvec_square(temp, 'F')]
 
         process_matrix = run_process_tomography(single_time_test_function, n_qubits=2, verbose=False)
         if _rank == 0:

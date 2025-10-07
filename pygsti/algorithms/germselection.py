@@ -2,7 +2,7 @@
 Functions for selecting a complete set of germs for a GST analysis.
 """
 #***************************************************************************************************
-# Copyright 2015, 2019 National Technology & Engineering Solutions of Sandia, LLC (NTESS).
+# Copyright 2015, 2019, 2025 National Technology & Engineering Solutions of Sandia, LLC (NTESS).
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights
 # in this software.
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -24,9 +24,8 @@ from pygsti.algorithms import scoring as _scoring
 from pygsti import circuits as _circuits
 from pygsti import baseobjs as _baseobjs
 from pygsti.tools import mpitools as _mpit
-from pygsti.baseobjs.statespace import ExplicitStateSpace as _ExplicitStateSpace
-from pygsti.baseobjs.statespace import QuditSpace as _QuditSpace
 from pygsti.models import ExplicitOpModel as _ExplicitOpModel
+from pygsti.forwardsims import MatrixForwardSimulator as _MatrixForwardSimulator
 
 FLOATSIZE = 8  # in bytes: TODO: a better way
 
@@ -57,10 +56,8 @@ def find_germs(target_model, randomize=True, randomization_strength=1e-2,
 
     Parameters
     ----------
-    target_model : Model or list of Model
-        The model you are aiming to implement, or a list of models that are
-        copies of the model you are trying to implement (either with or
-        without random unitary perturbations applied to the models).
+    target_model : Model
+        The model you are aiming to implement.
 
     randomize : bool, optional
         Whether or not to add random unitary perturbations to the model(s)
@@ -188,9 +185,18 @@ def find_germs(target_model, randomize=True, randomization_strength=1e-2,
         A list containing the germs making up the germ set.
     """
     printer = _baseobjs.VerbosityPrinter.create_printer(verbosity, comm)
+    
+    if not isinstance(target_model.sim, _MatrixForwardSimulator):
+        target_model = target_model.copy()
+        target_model.sim = 'matrix'
+
     modelList = _setup_model_list(target_model, randomize,
                                   randomization_strength, num_gs_copies, seed)
-    gates = list(target_model.operations.keys())
+                                  
+    try:
+        gates = list(target_model.operations.keys())
+    except AttributeError:
+        gates = list(target_model.operation_blks['layers'].keys())
     availableGermsList = []
     if candidate_germ_counts is None: candidate_germ_counts = {6: 'all upto'}
     for germLength, count in candidate_germ_counts.items():
@@ -229,7 +235,7 @@ def find_germs(target_model, randomize=True, randomization_strength=1e-2,
         #if missing append to the list of available germs.
         if isinstance(force, list):
             for forced_germ in force:
-                if not forced_germ in availableGermsList:
+                if forced_germ not in availableGermsList:
                     availableGermsList.append(forced_germ)
         printer.log('Length Available Germ List After Adding Back In Forced Germs: '+ str(len(availableGermsList)), 1)
     
@@ -249,7 +255,7 @@ def find_germs(target_model, randomize=True, randomization_strength=1e-2,
     dim = target_model.dim
     #Np = model_list[0].num_params #wrong:? includes spam...
     Np = target_model.num_params
-    if randomize==False:
+    if not randomize:
         num_gs_copies=1
     memEstimatealljac = FLOATSIZE * num_gs_copies * len(availableGermsList) * Np**2
     # for _compute_bulk_twirled_ddd
@@ -401,7 +407,28 @@ def find_germs(target_model, randomize=True, randomization_strength=1e-2,
         raise ValueError("'{}' is not a valid algorithm "
                          "identifier.".format(algorithm))
 
-    return germList
+    #force the line labels on each circuit to match the state space labels for the target model.
+    #this is suboptimal for many-qubit models, so will probably want to revisit this. #TODO
+    def fix_line_labels(germListToFix):
+        fixedGermList = []
+        if germListToFix is not None:
+            for ckt_or_list in germListToFix:
+                if isinstance(ckt_or_list, _circuits.Circuit) and ckt_or_list._static:
+                    new_ckt = ckt_or_list.copy(editable=True)
+                    new_ckt.line_labels = target_model.state_space.state_space_labels
+                    new_ckt.done_editing()
+                    fixedGermList.append(new_ckt)
+                elif isinstance(ckt_or_list, _circuits.Circuit):
+                    ckt_or_list.line_labels = target_model.state_space.state_space_labels
+                    fixedGermList.append(ckt_or_list)
+                else:
+                    # This is probably a list of circuits from GRASP w/ return_all = True
+                    # Call this function recursively
+                    fixedGermList.append(fix_line_labels(ckt_or_list))
+        return fixedGermList
+    finalGermList = fix_line_labels(germList)
+
+    return finalGermList
 
 
 def compute_germ_set_score(germs, target_model=None, neighborhood=None,
@@ -1279,11 +1306,16 @@ def _bulk_twirled_deriv(model, circuits, eps=1e-6, check=False, comm=None, float
     numpy array
         An array of shape (num_simplified_circuits, op_dim^2, num_model_params)
     """
-    if len(model.preps) > 0 or len(model.povms) > 0:
-        model = _remove_spam_vectors(model)
-        # This function assumes model has no spam elements so `lookup` below
-        #  gives indexes into products computed by evalTree.
 
+    # This function assumes model has no spam elements so `lookup` below
+    #  gives indexes into products computed by evalTree.
+    try:
+        if len(model.preps) > 0 or len(model.povms) > 0:
+            model = _remove_spam_vectors(model)            
+    except AttributeError: # try treating like implicit model
+        if len(model.prep_blks) > 0 or len(model.povm_blks) > 0:
+            model = _remove_spam_vectors(model)
+        
     resource_alloc = _baseobjs.ResourceAllocation(comm=comm)
     dProds, prods = model.sim.bulk_dproduct(circuits, flat=True, return_prods=True, resource_alloc=resource_alloc)
     op_dim = model.dim
@@ -1351,6 +1383,10 @@ def test_germ_set_finitel(model, germs_to_test, length, weights=None,
         eigenvalues (from small to large) of the jacobian^T * jacobian
         matrix used to determine parameter amplification.
     """
+    if not isinstance(model.sim, _MatrixForwardSimulator):
+        model = model.copy()
+        model.sim = 'matrix'
+
     # Remove any SPAM vectors from model since we only want
     # to consider the set of *gate* parameters for amplification
     # and this makes sure our parameter counting is correct
@@ -1758,11 +1794,15 @@ def find_germs_breadthfirst(model_list, germs_list, randomize=True,
     #assert(all([(mdl.num_params == Np) for mdl in model_list])), \
     #    "All models must have the same number of parameters!"
 
-    (_, numGaugeParams,
-     numNonGaugeParams, _) = _get_model_params(model_list)
     if num_nongauge_params is not None:
-        numGaugeParams = numGaugeParams + numNonGaugeParams - num_nongauge_params
+        reducedModelList = list(map(_remove_spam_vectors, model_list))
+        numParamsSet = {reducedModel.num_params for reducedModel in reducedModelList}
+        if len(numParamsSet) != 1:
+            raise ValueError("When specifying num_nongauge_params, all models must have the same number of parameters.")
+        numGaugeParams = next(iter(numParamsSet)) - num_nongauge_params
         numNonGaugeParams = num_nongauge_params
+    else:
+        (_, numGaugeParams, numNonGaugeParams, _) = _get_model_params(model_list)
 
     germLengths = _np.array([len(germ) for germ in germs_list], _np.int64)
 
@@ -3009,9 +3049,15 @@ def _compute_bulk_twirled_ddd_compact(model, germs_list, eps,
     #The representations of the germ process matrices are clearly independent 
     #of the spam parameters. (I say that, but I only realized I had forgotten this like
     #6 months later...)
-    if len(model.preps) > 0 or len(model.povms) > 0:
-        model = _remove_spam_vectors(model)
-        # This function assumes model has no spam elements so `lookup` below
+    try:
+        if len(model.preps) > 0 or len(model.povms) > 0:
+            model = _remove_spam_vectors(model)
+            # This function assumes model has no spam elements so `lookup` below
+    except AttributeError:
+        if len(model.prep_blks['layers']) > 0 or \
+           len(model.povm_blks['layers']) > 0:
+            model = _remove_spam_vectors(model)
+            # This function assumes model has no spam elements so `lookup` below
     
     if printer is not None:
         printer.log('Generating compact EVD Cache',1)
@@ -3295,80 +3341,81 @@ def symmetric_low_rank_spectrum_update(update, orig_e, U, proj_U, force_rank_inc
     #return the new eigenvalues
     return new_evals, True
  
-#Note: This function won't work for our purposes because of the assumptions
-#about the rank of the update on the nullspace of the matrix we're updating,
-#but keeping this here commented for future reference.
-#Function for doing fast calculation of the updated inverse trace:
-#def riedel_style_inverse_trace(update, orig_e, U, proj_U, force_rank_increase=True):
-#    """
-#    input:
-#    
-#    update : ndarray
-#        symmetric low-rank update to perform.
-#        This is the first half the symmetric rank decomposition s.t.
-#        update@update.T= the full update matrix.
-#    
-#    orig_e : ndarray
-#        Spectrum of the original matrix. This is a 1-D array.
-#        
-#    proj_U : ndarray
-#        Projector onto the complement of the column space of the
-#        original matrix's eigenvectors.
-#        
-#    output:
-#    
-#    trace : float
-#        Value of the trace of the updated psuedoinverse matrix.
-#    
-#    updated_rank : int
-#        total rank of the updated matrix.
-#        
-#    rank_increase_flag : bool
-#        a flag that is returned to indicate is a candidate germ failed to amplify additional parameters. 
-#        This indicates things short circuited and so the scoring function should skip this germ.
-#    """
-#    
-#    #First we need to for the matrix P, whose column space
-#    #forms an orthonormal basis for the component of update
-#    #that is in the complement of U.
-#    
-#    proj_update= proj_U@update
-#    
-#    #Next take the RRQR decomposition of this matrix:
-#    q_update, r_update, _ = _sla.qr(proj_update, mode='economic', pivoting=True)
-#    
-#    #Construct P by taking the columns of q_update corresponding to non-zero values of r_A on the diagonal.
-#    nonzero_indices_update= _np.nonzero(_np.diag(r_update)>1e-10) #HARDCODED (threshold is hardcoded)
-#    
-#    #if the rank doesn't increase then we can't use the Riedel approach.
-#    #Abort early and return a flag to indicate the rank did not increase.
-#    if len(nonzero_indices_update[0])==0 and force_rank_increase:
-#        return None, None, False
-#    
-#    P= q_update[: , nonzero_indices_update[0]]
-#    
-#    updated_rank= len(orig_e)+ len(nonzero_indices_update[0])
-#    
-#    #Now form the matrix R_update which is given by P.T @ proj_update.
-#    R_update= P.T@proj_update
-#    
-#    #R_update gets concatenated with U.T@update to form
-#    #a block column matrixblock_column= np.concatenate([U.T@update, R_update], axis=0)    
-#    
-#    Uta= U.T@update
-#    
-#    try:
-#        RRRDinv= R_update@_np.linalg.inv(R_update.T@R_update) 
-#    except _np.linalg.LinAlgError as err:
-#        print('Numpy thinks this matrix is singular, condition number is: ', _np.linalg.cond(R_update.T@R_update))
-#        print((R_update.T@R_update).shape)
-#        raise err
-#    pinv_orig_e_mat= _np.diag(1/orig_e)
-#    
-#    trace= _np.sum(1/orig_e) + _np.trace( RRRDinv@(_np.eye(Uta.shape[1]) + Uta.T@pinv_orig_e_mat@Uta)@RRRDinv.T )
-#    
-#    return trace, updated_rank, True
+# Note: Th function below won't work for our purposes because of the assumptions
+# about the rank of the update on the nullspace of the matrix we're updating,
+# but keeping this here commented for future reference.
+'''
+def riedel_style_inverse_trace(update, orig_e, U, proj_U, force_rank_increase=True):
+    """
+    input:
     
+    update : ndarray
+        symmetric low-rank update to perform.
+        This is the first half the symmetric rank decomposition s.t.
+        update@update.T= the full update matrix.
+    
+    orig_e : ndarray
+        Spectrum of the original matrix. This is a 1-D array.
+        
+    proj_U : ndarray
+        Projector onto the complement of the column space of the
+        original matrix's eigenvectors.
+        
+    output:
+    
+    trace : float
+        Value of the trace of the updated psuedoinverse matrix.
+    
+    updated_rank : int
+        total rank of the updated matrix.
+        
+    rank_increase_flag : bool
+        a flag that is returned to indicate is a candidate germ failed to amplify additional parameters. 
+        This indicates things short circuited and so the scoring function should skip this germ.
+    """
+    
+    #First we need to for the matrix P, whose column space
+    #forms an orthonormal basis for the component of update
+    #that is in the complement of U.
+    
+    proj_update= proj_U@update
+    
+    #Next take the RRQR decomposition of this matrix:
+    q_update, r_update, _ = _sla.qr(proj_update, mode='economic', pivoting=True)
+    
+    #Construct P by taking the columns of q_update corresponding to non-zero values of r_A on the diagonal.
+    nonzero_indices_update= _np.nonzero(_np.diag(r_update)>1e-10) #HARDCODED (threshold is hardcoded)
+    
+    #if the rank doesn't increase then we can't use the Riedel approach.
+    #Abort early and return a flag to indicate the rank did not increase.
+    if len(nonzero_indices_update[0])==0 and force_rank_increase:
+        return None, None, False
+    
+    P= q_update[: , nonzero_indices_update[0]]
+    
+    updated_rank= len(orig_e)+ len(nonzero_indices_update[0])
+    
+    #Now form the matrix R_update which is given by P.T @ proj_update.
+    R_update= P.T@proj_update
+    
+    #R_update gets concatenated with U.T@update to form
+    #a block column matrixblock_column= np.concatenate([U.T@update, R_update], axis=0)    
+    
+    Uta= U.T@update
+    
+    try:
+        RRRDinv= R_update@_np.linalg.inv(R_update.T@R_update) 
+    except _np.linalg.LinAlgError as err:
+        print('Numpy thinks this matrix is singular, condition number is: ', _np.linalg.cond(R_update.T@R_update))
+        print((R_update.T@R_update).shape)
+        raise err
+    pinv_orig_e_mat= _np.diag(1/orig_e)
+    
+    trace= _np.sum(1/orig_e) + _np.trace( RRRDinv@(_np.eye(Uta.shape[1]) + Uta.T@pinv_orig_e_mat@Uta)@RRRDinv.T )
+    
+    return trace, updated_rank, True
+'''
+
 def minamide_style_inverse_trace(update, orig_e, U, proj_U, force_rank_increase=False):
     """
     This function performs a low-rank update to the components of
@@ -3458,7 +3505,7 @@ def minamide_style_inverse_trace(update, orig_e, U, proj_U, force_rank_increase=
         try:
             central_mat_chol= _np.linalg.cholesky(central_mat)
             cholesky_success=True
-        except _np.linalg.LinAlgError as err:
+        except _np.linalg.LinAlgError:
             #Cholesky decomposition probably failed.
             #I'm not sure why it failed though so print some diagnostic info:
             cholesky_success=False
@@ -3510,7 +3557,7 @@ def minamide_style_inverse_trace(update, orig_e, U, proj_U, force_rank_increase=
         try:
             Dinv_chol= _np.linalg.cholesky(_np.linalg.inv(_np.eye(pinv_R_update.shape[0]) + B@(pinv_E_beta.T@pinv_E_beta)@B))
             cholesky_success=True
-        except _np.linalg.LinAlgError as err:
+        except _np.linalg.LinAlgError:
             #Cholesky decomposition probably failed.
             #I'm not sure why it failed though so print some diagnostic info:
             #Is B symmetric or hermitian?
@@ -4509,6 +4556,10 @@ def germ_set_spanning_vectors(target_model, germ_list, assume_real=False, float_
         amplificational properties of the reduced vector set. 
     """
     printer = _baseobjs.VerbosityPrinter.create_printer(verbosity)
+
+    if not isinstance(target_model.sim, _MatrixForwardSimulator):
+        target_model = target_model.copy()
+        target_model.sim = 'matrix'
     
     #Add some checks related to the option to switch up data types:
     if not assume_real:
@@ -4620,7 +4671,7 @@ def germ_set_spanning_vectors(target_model, germ_list, assume_real=False, float_
             if prev_update_cache is None:
                 current_update_cache = construct_update_cache_rank_one(currentDDD, evd_tol=evd_tol)
             else:
-                if update_cache_low_rank == True:
+                if update_cache_low_rank:
                     #do a rank one psuedoinverse update wrt the best vector from the prior round
                     current_update_cache = construct_update_cache_rank_one(currentDDD, evd_tol=evd_tol, 
                                                                            prev_update_cache = prev_update_cache,
@@ -4686,7 +4737,7 @@ def germ_set_spanning_vectors(target_model, germ_list, assume_real=False, float_
             #compare these to the results of the greedy search and raise and error if they are significantly different.
             #Hardcoded tolerance is primarily meant to detect catastrophic failures, hence it being pretty large.
             if (abs(final_test_pinv - best_vec_score.minor) > 1) or (final_test_rank != best_vec_score.N): #HARDCODED
-                raise ValueError(f'Final test failed. Either the psuedoinverse traces are different or the final ranks are different. \n'
+                raise ValueError('Final test failed. Either the psuedoinverse traces are different or the final ranks are different. \n'
                                  + f'The final psuedoinverse-trace from the test is: {final_test_pinv} and the final rank from the test is: {final_test_rank} \n'
                                  + f'The final psuedoinverse-trace from the greedy search is: {best_vec_score.minor} and the final rank from the greedy search is: {best_vec_score.N}')
             

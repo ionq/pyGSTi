@@ -2,7 +2,7 @@
 Functions for reducing the number of required fiducial pairs for analysis.
 """
 #***************************************************************************************************
-# Copyright 2015, 2019 National Technology & Engineering Solutions of Sandia, LLC (NTESS).
+# Copyright 2015, 2019, 2025 National Technology & Engineering Solutions of Sandia, LLC (NTESS).
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights
 # in this software.
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -19,22 +19,20 @@ import scipy.special as _spspecial
 import scipy.linalg as _sla
 
 from math import ceil
-import time
 
 from pygsti import baseobjs as _baseobjs
 from pygsti import circuits as _circuits
 
 from pygsti.circuits import circuitconstruction as _gsc
 from pygsti.modelmembers.operations import EigenvalueParamDenseOp as _EigenvalueParamDenseOp
-from pygsti.tools import apply_aliases_to_circuits as _apply_aliases_to_circuits
 from pygsti.tools import remove_duplicates as _remove_duplicates
 from pygsti.tools import slicetools as _slct
 from pygsti.tools.legacytools import deprecate as _deprecated_fn
+from pygsti.forwardsims import MatrixForwardSimulator as _MatrixForwardSimulator
 
-from pygsti.algorithms.germselection import construct_update_cache, minamide_style_inverse_trace, compact_EVD, compact_EVD_via_SVD, germ_set_spanning_vectors
+from pygsti.algorithms.germselection import construct_update_cache, minamide_style_inverse_trace, compact_EVD, germ_set_spanning_vectors
 from pygsti.algorithms import scoring as _scoring
 
-from pygsti.tools.matrixtools import print_mx
 
 import warnings
 
@@ -1210,7 +1208,7 @@ def _get_per_germ_power_fidpairs(prep_fiducials, meas_fiducials, prep_povm_tuple
                 
     #if we've found a good candidate set from the user specified seed then this will be skipped, else if we haven't
     #or there wasn't a candidate_set_seed passed in we'll default to the standard algorithm.
-    if (candidate_set_seed is None) or (found_from_seed_set==False):
+    if (candidate_set_seed is None) or (not found_from_seed_set):
         for nNeededPairs in range(min_pairs_needed, nPossiblePairs):
             printer.log("Beginning search for a good set of %d pairs (%d pair lists to test)" %
                         (nNeededPairs, _nCr(nPossiblePairs, nNeededPairs)), 2)
@@ -1281,7 +1279,7 @@ def _get_per_germ_power_fidpairs(prep_fiducials, meas_fiducials, prep_povm_tuple
                                 #of fiducial pair sets and from the list of eigenvalues.
                                 try:
                                     bestPairs.pop(bestFirstEval[-1])
-                                except KeyError as err:
+                                except KeyError:
                                     printer.log(f"Trying to drop the element from bestPairs with key: {bestFirstEval[-1]}", 3)
                                     printer.log(f"Current keys in this dictionary: {bestPairs.keys()}", 3)
                                     
@@ -1695,6 +1693,10 @@ def find_sufficient_fiducial_pairs_per_germ_global(target_model, prep_fiducials,
         `prep_fiducials` and `meas_fiducials`).
     """
 
+    if not isinstance(target_model.sim, _MatrixForwardSimulator):
+        target_model = target_model.copy()
+        target_model.sim = 'matrix'
+
     printer = _baseobjs.VerbosityPrinter.create_printer(verbosity)
 
     #if no germ_vector_spanning_set is passed in compute it here.
@@ -1710,8 +1712,8 @@ def find_sufficient_fiducial_pairs_per_germ_global(target_model, prep_fiducials,
             used_kwargs = default_germ_set_kwargs.copy()
             if germ_set_spanning_kwargs is not None:
                 used_kwargs.update(germ_set_spanning_kwargs)
-
-            germ_vector_spanning_set = germ_set_spanning_vectors(target_model, germs, 
+                                       
+            germ_vector_spanning_set, _ = germ_set_spanning_vectors(target_model, germs, 
                                                                  float_type=float_type, 
                                                                  evd_tol = evd_tol,
                                                                  verbosity=verbosity,
@@ -2183,10 +2185,16 @@ def compute_jacobian_dicts(model, germs, prep_fiducials, meas_fiducials, prep_po
 def _set_up_prep_POVM_tuples(target_model, prep_povm_tuples, return_meas_dofs= False):
 
     if prep_povm_tuples == "first":
-        firstRho = list(target_model.preps.keys())[0]
-        prep_ssl = [target_model.preps[firstRho].state_space.state_space_labels]
-        firstPOVM = list(target_model.povms.keys())[0]
-        POVM_ssl = [target_model.povms[firstPOVM].state_space.state_space_labels]
+        try:
+            firstRho = list(target_model.preps.keys())[0]
+            prep_ssl = [target_model.preps[firstRho].state_space.state_space_labels]
+            firstPOVM = list(target_model.povms.keys())[0]
+            POVM_ssl = [target_model.povms[firstPOVM].state_space.state_space_labels]
+        except AttributeError:
+            firstRho = list(target_model.prep_blks['layers'].keys())[0]
+            prep_ssl = [target_model.prep_blks['layers'][firstRho].state_space.state_space_labels]
+            firstPOVM = list(target_model.povm_blks['layers'].keys())[0]
+            POVM_ssl = [target_model.povm_blks['layers'][firstPOVM].state_space.state_space_labels]
         prep_povm_tuples = [(firstRho, firstPOVM)]
         #I think using the state space labels for firstRho and firstPOVM as the
         #circuit labels should work most of the time (new stricter line_label enforcement means
@@ -2196,11 +2204,18 @@ def _set_up_prep_POVM_tuples(target_model, prep_povm_tuples, return_meas_dofs= F
     #if not we still need to extract state space labels for all of these to meet new circuit
     #label handling requirements.
     else:
-        prep_ssl = [target_model.preps[lbl_tup[0]].state_space.state_space_labels for lbl_tup in prep_povm_tuples]
-        POVM_ssl = [target_model.povms[lbl_tup[1]].state_space.state_space_labels for lbl_tup in prep_povm_tuples]
+        try:
+            prep_ssl = [target_model.preps[lbl_tup[0]].state_space.state_space_labels for lbl_tup in prep_povm_tuples]
+            POVM_ssl = [target_model.povms[lbl_tup[1]].state_space.state_space_labels for lbl_tup in prep_povm_tuples]
+        except AttributeError:
+            prep_ssl = [target_model.prep_blks['layers'][lbl_tup[0]].state_space.state_space_labels for lbl_tup in prep_povm_tuples]
+            POVM_ssl = [target_model.povm_blks['layers'][lbl_tup[1]].state_space.state_space_labels for lbl_tup in prep_povm_tuples]
 
     #brief intercession to calculate the number of degrees of freedom for the povm.
-    num_effects= len(list(target_model.povms[prep_povm_tuples[0][1]].keys()))
+    try:
+        num_effects= len(list(target_model.povms[prep_povm_tuples[0][1]].keys()))
+    except AttributeError:
+        num_effects= len(list(target_model.povm_blks['layers'][prep_povm_tuples[0][1]].keys()))
     dof_per_povm= num_effects-1
 
     prep_povm_tuples = [(_circuits.Circuit([prepLbl], line_labels=prep_ssl[i]), 

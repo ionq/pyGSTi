@@ -136,12 +136,12 @@ class TestWorkspace(ReportBaseCase):
         tbls.append( w.SpamParametersTable(self.mdl, cr ) )
         tbls.append( w.SpamParametersTable(gsMultiSpam, cr ) )
 
-        tbls.append( w.GatesTable(self.mdl, ["mytitle"], display_as="boxes", confidence_region_info=cr ) )
-        tbls.append( w.GatesTable(self.mdl, ["mytitle"], display_as="numbers", confidence_region_info=cr ) )
-        tbls.append( w.GatesTable(gsTP, ["mytitle"], display_as="numbers", confidence_region_info=cr2TP ) )
-        tbls.append( w.GatesTable(gsCPTP, ["mytitle"], display_as="numbers", confidence_region_info=cr2CPTP ) )
+        tbls.append( w.GatesTable(self.mdl, ["mytitle"], display_as="boxes", confidence_region_infos=cr ) )
+        tbls.append( w.GatesTable(self.mdl, ["mytitle"], display_as="numbers", confidence_region_infos=cr ) )
+        tbls.append( w.GatesTable(gsTP, ["mytitle"], display_as="numbers", confidence_region_infos=cr2TP ) )
+        tbls.append( w.GatesTable(gsCPTP, ["mytitle"], display_as="numbers", confidence_region_infos=cr2CPTP ) )
         with self.assertRaises(ValueError):
-            w.GatesTable(self.mdl, ["mytitle"], display_as="foobar", confidence_region_info=cr )
+            w.GatesTable(self.mdl, ["mytitle"], display_as="foobar", confidence_region_infos=cr )
 
         tbls.append( w.ChoiTable(self.mdl, ["mytitle"], cr ) )
         tbls.append( w.ChoiTable(gsQT, ["mytitle"], None ) )
@@ -312,35 +312,11 @@ class TestWorkspace(ReportBaseCase):
         with self.assertRaises(ValueError):
             w.ColorBoxPlot(("chi2",), self.gss, self.ds, self.mdl, typ="foobar")
 
-        from pygsti.algorithms import directx as dx
-        #specs = pygsti.construction.build_spam_specs(
-        #        prepStrs=prepStrs,
-        #        effectStrs=effectStrs,
-        #        prep_labels=list(self.mdl.preps.keys()),
-        #        effect_labels=self.mdl.get_effect_labels() )
-
-        baseStrs = [plaq.base for _, plaq in self.gss.iter_plaquettes()]
-        #print(f'{baseStrs=}')
-        #print(f'{prepStrs=}')
-        #print(f'{effectStrs=}')
-        #print(self.ds)
-        #print(f'{list(self.gss)=}')
-        #print(self.mdl)
-        
-        directModels = dx.direct_mlgst_models(
-            baseStrs, self.ds, prepStrs, effectStrs, self.tgt, svd_truncate_to=4)
-        #print(f'{directModels=}')
-        plts.append( w.ColorBoxPlot(["chi2","logl","blank"], self.gss,
-                                    self.ds, self.mdl, box_labels=False, direct_gst_models=directModels) )
-        plts.append( w.ColorBoxPlot(["errorrate"], self.gss,
-                                    self.ds, self.mdl, box_labels=False, sum_up=True,
-                                    direct_gst_models=directModels) )
-
         gmx = np.identity(4,'d'); gmx[3,0] = 0.5
         plts.append(w.MatrixPlot(gmx, -1, 1, ['a','b','c','d'], ['e','f','g','h'], "X", "Y",
                                  colormap = pygsti.report.colormaps.DivergingColormap(vmin=-2, vmax=2)))
         plts.append( w.MatrixPlot(gmx, -1,1, ['a','b','c','d'], ['e','f','g','h'], "X", "Y",colormap=None))
-        plts.append( w.GateMatrixPlot(gmx, -1,1, "pp", "in", "out", box_labels=True) )
+        plts.append( w.GateMatrixPlot(gmx, -1,1, "pp", 'pp', "in", "out", box_labels=True) )
 
         #Polar plots don't work in latest plotly -- no 'r' variable -- TODO update (but these plots are unused) POLAR SKIP
         #plts.append( w.PolarEigenvaluePlot([np.linalg.eigvals(self.mdl.operations['Gx'])],["purple"],scale=1.5) )
@@ -696,6 +672,7 @@ class TestWorkspace(ReportBaseCase):
 
 
         # ----- _circuit_color_scatterplot -----
+        colormap = pygsti.report.colormaps.SequentialColormap(0,10)
         pygsti.report.workspaceplots._circuit_color_scatterplot(
             gss, mxs, colormap, sum_up=True)
         pygsti.report.workspaceplots._circuit_color_scatterplot(
@@ -723,7 +700,7 @@ class TestWorkspace(ReportBaseCase):
 
         # ---- _opmatrix_color_boxplot ----
         pygsti.report.workspaceplots._opmatrix_color_boxplot(
-            np.identity(4,'d'), -1.0, 1.0, mx_basis="pp", mx_basis_y="gm")
+            np.identity(4,'d'), -1.0, 1.0, mx_basis_x="pp", mx_basis_y="gm")
           # test weird case when there's different bases on diff axes
 
         # ---- _matrix_color_boxplot ----

@@ -14,6 +14,7 @@ class InstrumentTestCase(BaseTestCase):
     def setUp(self):
         #Add an instrument to the standard target model
         self.target_model = std.target_model()
+        self.target_model.sim = 'matrix'
         E = self.target_model.povms['Mdefault']['0']
         Erem = self.target_model.povms['Mdefault']['1']
         Gmz_plus = np.dot(E,E.T)
@@ -150,8 +151,8 @@ class InstrumentTestCase(BaseTestCase):
 
         #LSGST
         results = pygsti.run_long_sequence_gst(ds, self.target_model, fiducials, fiducials, germs, max_lengths)
-        #print(results.estimates[results.name].models['go0'])
-        mdl_est = results.estimates[results.name].models['go0']
+        #print(results.estimates[results.name].models['stdgaugeopt'])
+        mdl_est = results.estimates[results.name].models['stdgaugeopt']
         mdl_est_opt = pygsti.gaugeopt_to_target(mdl_est, mdl_datagen)
         print("Frobdiff = ", mdl_datagen.frobeniusdist(mdl_est))
         print("Frobdiff after GOpt = ", mdl_datagen.frobeniusdist(mdl_est_opt))
@@ -163,7 +164,7 @@ class InstrumentTestCase(BaseTestCase):
         self.assertEqual(mdl_targetTP.num_params,71) # 3 + 4*2 + 12*5 = 71
         #print(mdl_targetTP)
         resultsTP = pygsti.run_long_sequence_gst(ds, mdl_targetTP, fiducials, fiducials, germs, max_lengths, verbosity=4)
-        mdl_est = resultsTP.estimates[resultsTP.name].models['go0']
+        mdl_est = resultsTP.estimates[resultsTP.name].models['stdgaugeopt']
         mdl_est_opt = pygsti.gaugeopt_to_target(mdl_est, mdl_datagen)
         print("TP Frobdiff = ", mdl_datagen.frobeniusdist(mdl_est))
         print("TP Frobdiff after GOpt = ", mdl_datagen.frobeniusdist(mdl_est_opt))
@@ -174,17 +175,12 @@ class InstrumentTestCase(BaseTestCase):
         model = pygsti.models.modelconstruction.create_explicit_model_from_expressions(
             [('Q0',)],['Gi','Gx','Gy'],
             [ "I(Q0)","X(pi/8,Q0)", "Y(pi/8,Q0)"])
-        #    prep_labels=["rho0"], prep_expressions=["0"],
-        #    effect_labels=["0","1"], effect_expressions=["0","complement"])
+        model.sim= 'matrix'
 
         v0 = modelconstruction.create_spam_vector("0", "Q0", "pp")
         v1 = modelconstruction.create_spam_vector("1", "Q0", "pp")
         P0 = np.dot(v0,v0.T)
         P1 = np.dot(v1,v1.T)
-        print("v0 = ",v0)
-        print("P0 = ",P0)
-        print("P1 = ",P0)
-        #print("P0+P1 = ",P0+P1)
 
         model.instruments["Itest"] = pygsti.modelmembers.instruments.Instrument([('0', P0), ('1', P1)])
 

@@ -2,7 +2,7 @@
 Defines the DataSet class and supporting classes and functions
 """
 #***************************************************************************************************
-# Copyright 2015, 2019 National Technology & Engineering Solutions of Sandia, LLC (NTESS).
+# Copyright 2015, 2019, 2025 National Technology & Engineering Solutions of Sandia, LLC (NTESS).
 # Under the terms of Contract DE-NA0003525 with NTESS, the U.S. Government retains certain rights
 # in this software.
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -26,6 +26,7 @@ import numpy as _np
 from pygsti.circuits import circuit as _cir
 from pygsti.baseobjs import outcomelabeldict as _ld, _compatibility as _compat
 from pygsti.baseobjs.mongoserializable import MongoSerializable as _MongoSerializable
+from pygsti.baseobjs.label import Label as _Label
 from pygsti.tools import NamedDict as _NamedDict
 from pygsti.tools import listtools as _lt
 from pygsti.tools.legacytools import deprecate as _deprecated_fn
@@ -296,33 +297,9 @@ class _DataSetRow(object):
         last_time = None
         seriesDict = {self.dataset.olIndex[ol]: [] for ol in self.dataset.outcome_labels}
 
-        #REMOVED: (though this gives slightly different behavior)
-        #for outcome_label in self.outcomes:
-        #    if outcome_label not in seriesDict.keys():
-        #        seriesDict[outcome_label] = []
-
         if self.reps is None:
             reps = _np.ones(len(self.time), _np.int64)
         else: reps = self.reps
-
-        # An alternate implementation that appears to be (surprisingly?) slower...
-        ##Get time bin locations
-        #time_bins_borders = []
-        #last_time = None
-        #for i, t in enumerate(self.time):
-        #    if t != last_time:
-        #        time_bins_borders.append(i)
-        #        last_time = t
-        #time_bins_borders.append(len(self.time))
-        #nTimes = len(time_bins_borders) - 1
-        #
-        #seriesDict = {self.dataset.olIndex[ol]: _np.zeros(nTimes, _np.int64) for ol in self.dataset.outcome_labels}
-        #
-        #for i in range(nTimes):
-        #    slc = slice(time_bins_borders[i],time_bins_borders[i+1])
-        #    times.append( self.time[slc.start] )
-        #    for oli, rep in zip(self.oli[slc], reps[slc]):
-        #        seriesDict[oli][i] += rep
 
         for t, oli, rep in zip(self.time, self.oli, reps):
 
@@ -586,26 +563,28 @@ class _DataSetRow(object):
             tslc = _np.where(_np.isclose(self.time, timestamp))[0]
         else: tslc = slice(None)
 
+        oli_tslc = self.oli[tslc]
         nOutcomes = len(self.dataset.olIndex)
-        nIndices = len(self.oli[tslc])
+        nIndices = len(oli_tslc)
+        
         if nOutcomes <= nIndices or all_outcomes:
             if self.reps is None:
                 for ol, i in self.dataset.olIndex.items():
-                    cnt = float(_np.count_nonzero(_np.equal(self.oli[tslc], i)))
-                    if all_outcomes or cnt > 0:
+                    cnt = float(_np.count_nonzero(_np.equal(oli_tslc, i)))
+                    if cnt > 0 or all_outcomes:
                         cntDict.setitem_unsafe(ol, cnt)
             else:
                 for ol, i in self.dataset.olIndex.items():
-                    inds = _np.nonzero(_np.equal(self.oli[tslc], i))[0]
-                    if all_outcomes or len(inds) > 0:
+                    inds = oli_tslc[oli_tslc == i]
+                    if len(inds) > 0 or all_outcomes:
                         cntDict.setitem_unsafe(ol, float(sum(self.reps[tslc][inds])))
         else:
             if self.reps is None:
-                for ol_index in self.oli[tslc]:
+                for ol_index in oli_tslc:
                     ol = self.dataset.ol[ol_index]
                     cntDict.setitem_unsafe(ol, 1.0 + cntDict.getitem_unsafe(ol, 0.0))
             else:
-                for ol_index, reps in zip(self.oli[tslc], self.reps[tslc]):
+                for ol_index, reps in zip(oli_tslc, self.reps[tslc]):
                     ol = self.dataset.ol[ol_index]
                     cntDict.setitem_unsafe(ol, reps + cntDict.getitem_unsafe(ol, 0.0))
 
@@ -616,7 +595,8 @@ class _DataSetRow(object):
         """
         Dictionary of per-outcome counts.
         """
-        if self._cntcache: return self._cntcache  # if not None *and* len > 0
+        if self._cntcache: 
+            return self._cntcache  # if not None *and* len > 0
         ret = self._get_counts()
         if self._cntcache is not None:  # == and empty dict {}
             self._cntcache.update(ret)
@@ -1197,12 +1177,11 @@ class DataSet(_MongoSerializable):
         # needed because name-only Labels don't hash the same as strings
         # so key lookups need to be done at least with tuples of Labels.
         circuit = _cir.Circuit.cast(circuit)
-
         #Note: cirIndex value is either an int (non-static) or a slice (static)
-        repData = self.repData[self.cirIndex[circuit]] \
-            if (self.repData is not None) else None
-        return _DataSetRow(self, self.oliData[self.cirIndex[circuit]],
-                           self.timeData[self.cirIndex[circuit]], repData,
+        cirIndex = self.cirIndex[circuit]
+        repData = self.repData[cirIndex] if (self.repData is not None) else None
+        return _DataSetRow(self, self.oliData[cirIndex],
+                           self.timeData[cirIndex], repData,
                            self.cnt_cache[circuit] if self.bStatic else None,
                            self.auxInfo[circuit])
 
@@ -1313,11 +1292,28 @@ class DataSet(_MongoSerializable):
         list of strings
             A list where each element is a operation label.
         """
-        opLabels = []
-        for opLabelString in self:
-            for opLabel in opLabelString:
-                if not prefix or opLabel.name.startswith(prefix):
-                    if opLabel not in opLabels: opLabels.append(opLabel)
+        opLabels = set()
+        empty_label = _Label(())
+        for circuit in self:
+            for layer in circuit.layertup:
+                if isinstance(layer, list):
+                    for lbl in layer:
+                        if lbl.name.startswith(prefix):
+                            opLabels.add(lbl.name)
+                        elif lbl == empty_label:
+                            opLabels.add('[]')
+                elif isinstance(layer, _Label):
+                    if layer.name.startswith(prefix):
+                        opLabels.add(layer.name)
+                else:
+                    raise ValueError()
+
+        bracket_idle = '[]' in opLabels
+        opLabels = [op for op in opLabels if op != '[]']
+        opLabels.sort()
+        if bracket_idle:
+            opLabels = ['[]'] + opLabels
+
         return opLabels
 
     def degrees_of_freedom(self, circuits=None, method="present_outcomes-1",
@@ -1415,17 +1411,19 @@ class DataSet(_MongoSerializable):
         # if "keepseparate" mode, set occurrence id existing circuits to next available (positive) integer.
         if self.collisionAction == "keepseparate":
             if circuit in self.cirIndex:
-                tagged_circuit = circuit.copy()
+                tagged_circuit = circuit.copy(editable=True)
                 i = 1; tagged_circuit.occurrence = i
                 while tagged_circuit in self.cirIndex:
                     i += 1; tagged_circuit.occurrence = i
+                tagged_circuit.done_editing()
                 #add data for a new (duplicate) circuit
                 circuit = tagged_circuit
 
         # in other modes ("overwrite" and "aggregate"), strip off occurrence so duplicates are acted on appropriately
         elif circuit.occurrence is not None:
-            stripped_circuit = circuit.copy()
+            stripped_circuit = circuit.copy(editable=True)
             stripped_circuit.occurrence = None
+            stripped_circuit.done_editing()
             circuit = stripped_circuit
 
         return circuit
@@ -1507,7 +1505,7 @@ class DataSet(_MongoSerializable):
         #unsafe=True OK b/c outcome_label_list contains the keys of an OutcomeLabelDict
 
     def add_count_list(self, circuit, outcome_labels, counts, record_zero_counts=True,
-                       aux=None, update_ol=True, unsafe=False):
+                       aux=None, update_ol=True):
         """
         Add a single circuit's counts to this DataSet
 
@@ -1534,30 +1532,12 @@ class DataSet(_MongoSerializable):
         update_ol : bool, optional
             This argument is for internal use only and should be left as True.
 
-        unsafe : bool, optional
-            `True` means that `outcome_labels` is guaranteed to hold tuple-type
-            outcome labels and never plain strings.  Only set this to `True` if
-            you know what you're doing.
-
         Returns
         -------
         None
         """
-        if self.bStatic: raise ValueError("Cannot add data to a static DataSet object")
-        circuit = self._collisionaction_update_circuit(circuit)
-
-        if self.collisionAction == "aggregate" and circuit in self:
-            iNext = int(max(self[circuit].time)) + 1 \
-                if (len(self[circuit].time) > 0) else 0
-            timeStampList = [iNext] * len(counts)
-            overwriteExisting = False
-        else:
-            timeStampList = [0] * len(counts)
-            overwriteExisting = True
-
-        self.add_raw_series_data(circuit, outcome_labels, timeStampList,
-                                 counts, overwriteExisting, record_zero_counts,
-                                 aux, update_ol, unsafe=unsafe)
+        count_dict = {ol: count for ol, count in zip(outcome_labels, counts)}
+        self.add_count_dict(circuit, count_dict, record_zero_counts, aux, update_ol)
 
     def add_count_arrays(self, circuit, outcome_index_array, count_array,
                          record_zero_counts=True, aux=None):
@@ -1622,8 +1602,8 @@ class DataSet(_MongoSerializable):
         convert_int_to_binary : bool, optional (defaut True)
             By default the keys in the cirq Results object are the integers representing
             the bitstrings of the measurements on a set of qubits, in big-endian convention.
-            If True this uses the cirq function `cirq.big_endian_int_to_bits` to convert back
-            to a binary string before adding the counts as a entry into the pygsti dataset.
+            If True this converts back to a binary string before adding the counts as a 
+            entry into the pygsti dataset.
 
         num_qubits : int, optional (default None)
             Number of qubits used in the conversion from integers to binary when convert_int_to_binary
@@ -1748,6 +1728,14 @@ class DataSet(_MongoSerializable):
                 #rep count data was given, but we're not currently holding repdata,
                 # so we need to build this up for all existings sequences:
                 self._add_explicit_repetition_counts()
+
+        if rep_array is not None:
+            # Check for entries that are numerically equal to zero. For any such entries,
+            # so them to _exactly_ zero in preparation for floating-point equality checks
+            # with zero below, and in unit tests.
+            dtype_info = _np.finfo(rep_array.dtype)
+            near_zero = rep_array < 10**(-1.5*dtype_info.precision)
+            rep_array[near_zero] = 0
 
         if not record_zero_counts:
             # Go through repArray and remove any zeros, along with
