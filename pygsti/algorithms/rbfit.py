@@ -12,6 +12,7 @@ Functions for analyzing RB data
 
 import numpy as _np
 from scipy.optimize import curve_fit as _curve_fit
+import warnings as _warnings
 
 from pygsti.baseobjs.nicelyserializable import NicelySerializable as _NicelySerializable
 from pygsti.tools import rbtools as _rbt
@@ -70,12 +71,14 @@ def std_least_squares_fit(lengths, asps, n, seed=None, asymptote=None, ftype='fu
         return FAF_results
 
     if not all([x in FAF_results['estimates'] for x in ('a', 'b', 'p')]):
-        raise ValueError(("Initial fixed-asymptotic RB fit failed and is needed to seed requested %s fit type."
+        _warnings.warn(("Initial fixed-asymptotic RB fit failed and is needed to seed requested %s fit type."
                           " Please check that the RB data is valid.") % ftype)
-
-    # Full fit is seeded by the fixed asymptote fit.
-    seed_full = [FAF_results['estimates']['a'], FAF_results['estimates']['b'], FAF_results['estimates']['p']]
-    FF_results = custom_least_squares_fit(lengths, asps, n, seed=seed_full, rtype=rtype)
+        FF_results = {'success': False, 'estimates': {},
+                      'variable': {'a': False, 'b': False, 'p': False}, 'seed': {}}
+    else:
+        # Full fit is seeded by the fixed asymptote fit.
+        seed_full = [FAF_results['estimates']['a'], FAF_results['estimates']['b'], FAF_results['estimates']['p']]
+        FF_results = custom_least_squares_fit(lengths, asps, n, seed=seed_full, rtype=rtype)
 
     # Returns the requested fit type.
     if ftype == 'full': return FF_results
