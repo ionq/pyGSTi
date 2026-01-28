@@ -691,6 +691,7 @@ class Circuit(object):
                         + comp_lbl_flag + self._compilable_layer_indices_tup
             # Note: we *always* need line labels (even if they're empty) when using occurrence id
 
+    # TODO EGN: check copy behavior, this isn't refactored
     def _tup_copy(self, labels):
         """
         This Circuit as a standard Python tuple of layer Labels and line labels.
@@ -735,6 +736,7 @@ class Circuit(object):
         ret[list(self._compilable_layer_indices_tup)] = True
         return ret
 
+    # TODO EGN: check behavior - and setter too
     @property
     def str(self):
         """
@@ -826,6 +828,7 @@ class Circuit(object):
         """Note: this is not covered by __iter__ for case of contained CircuitLabels """
         return any([(x == layer or x in layer) for layer in self._labels])
 
+    # TODO EGN: check behavior - I don't think these are included in refactored classes?
     def __radd__(self, x):
         if not isinstance(x, Circuit):
             assert(all([isinstance(l, _Label) for l in x])), "Only Circuits and Label-tuples can be added to Circuits!"
@@ -916,8 +919,8 @@ class Circuit(object):
 
         return Circuit._fastinit(self.layertup + x.layertup, new_line_labels, editable=False, name='',
                                  stringrep=s, occurrence=None)
-    
 
+    # TODO EGN: not refactored?
     def sandwich(self, x, y):
         """
         Method for sandwiching labels around this circuit.
@@ -944,6 +947,7 @@ class Circuit(object):
         new_line_labels = tuple(sorted(new_line_labels))
         return Circuit._fastinit(x + self.layertup + y, new_line_labels, editable=False)
 
+    # TODO EGN: check behavior - not refactored?
     def repeat(self, ntimes, expand="default"):
         """
         Repeat this circuit `ntimes` times.
@@ -974,9 +978,11 @@ class Circuit(object):
             # just adds parens to string rep & copies
             return Circuit(self.layertup * ntimes, self._line_labels, None, not self._static, s, check=False)
 
+    # TODO EGN: check behavior - not refactored?
     def __mul__(self, x):
         return self.repeat(x)
 
+    # TODO EGN: check behavior - not refactored?
     def __pow__(self, x):  # same as __mul__()
         return self.__mul__(x)
 
@@ -998,6 +1004,7 @@ class Circuit(object):
             else:
                 return self.layertup == tup_x  # equality with non-circuits is just based on *labels*
 
+    # TODO EGN: check behavior - add to static circuit
     def __lt__(self, x):
         if isinstance(x, Circuit):
             if self._static and x._static:
@@ -1007,6 +1014,7 @@ class Circuit(object):
         else:
             return self.layertup < tuple(x)  # comparison with non-circuits is just based on *labels*
 
+    # TODO EGN: check behavior - add to static circuit
     def __gt__(self, x):
         if isinstance(x, Circuit):
             if self._static and x._static:
@@ -1027,6 +1035,7 @@ class Circuit(object):
         """
         return len(self._line_labels)
     
+    # TODO EGN: check behavior
     def copy(self, editable='auto'):
         """
         Returns a copy of the circuit.
@@ -1485,6 +1494,7 @@ class Circuit(object):
                     del self._labels[i][k]
             #Note: do not adjust compilable indices when only partial layers are inserted
 
+    # TODO EGN: check behavior - not refactored?
     def _append_idling_layers_inplace(self, num_to_insert, lines=None):
         """
         Adds one or more idling (blank) layers to the end of this circuit.
@@ -1510,6 +1520,7 @@ class Circuit(object):
         assert(not self._static), "Cannot edit a read-only circuit!"
         self.insert_idling_layers_inplace(None, num_to_insert, lines)
 
+    # TODO EGN: check behavior - not refactored?
     def insert_labels_into_layers(self, lbls, layer_to_insert_before, lines=None):
         """
         Inserts into this circuit the contents of `lbls` into new full or partial layers,
@@ -1546,6 +1557,7 @@ class Circuit(object):
         if self._static: cpy.done_editing()
         return cpy
 
+    # TODO EGN: check behavior - not refactored?
     def insert_labels_into_layers_inplace(self, lbls, layer_to_insert_before, lines=None):
         """
         Inserts into this circuit the contents of `lbls` into new full or partial layers.
@@ -1585,6 +1597,7 @@ class Circuit(object):
         self.set_labels(lbls, slice(layer_to_insert_before, layer_to_insert_before + numLayersToInsert), lines)
         #Note: set_labels expects lbls to be a list/tuple of Label-like items b/c it's given a layer *slice*
 
+    # TODO EGN: check behavior - not refactored?
     def insert_idling_lines(self, insert_before, line_labels):
         """
         Insert one or more idling (blank) lines into this circuit, returning a copy.
@@ -1608,6 +1621,7 @@ class Circuit(object):
         if self._static: cpy.done_editing()
         return cpy
 
+    # TODO EGN: check behavior - not refactored?
     def insert_idling_lines_inplace(self, insert_before, line_labels):
         """
         Insert one or more idling (blank) lines into this circuit.
@@ -1633,6 +1647,7 @@ class Circuit(object):
             i = self._line_labels.index(insert_before)
         self._line_labels = self._line_labels[0:i] + tuple(line_labels) + self._line_labels[i:]
 
+    # TODO EGN: check behavior - not refactored?
     def _append_idling_lines(self, line_labels):
         """
         Add one or more idling (blank) lines onto the bottom of this circuit.
@@ -1649,6 +1664,7 @@ class Circuit(object):
         """
         self.insert_idling_lines_inplace(None, line_labels)
 
+    # TODO EGN: check behavior - not refactored?
     def insert_labels_as_lines_inplace(self, lbls, layer_to_insert_before=None, line_to_insert_before=None,
                                        line_labels="auto"):
         """
@@ -1709,6 +1725,7 @@ class Circuit(object):
         #Note: set_labels expects lbls to be a list/tuple of Label-like items b/c it's given a layer *slice*
         self.set_labels(lbls, slice(layer_to_insert_before, layer_to_insert_before + numLayersToInsert), line_labels)
 
+    # TODO EGN: check behavior - not refactored?
     def insert_labels_as_lines(self, lbls, layer_to_insert_before=None, line_to_insert_before=None, line_labels="auto"):
         """
         Inserts into this circuit the contents of `lbls` into new lines, returning a copy.
@@ -1748,6 +1765,7 @@ class Circuit(object):
         if self._static: cpy.done_editing()
         return cpy
 
+    # TODO EGN: check behavior - not refactored?
     def _append_labels_as_lines(self, lbls, layer_to_insert_before=None, line_labels="auto"):
         """
         Adds the contents of `lbls` as new lines at the bottom of this circuit.
@@ -1797,6 +1815,7 @@ class Circuit(object):
             self._labels[i] = new_layer
         self._compilable_layer_indices_tup = ()
 
+    # TODO EGN: note docstrings not carried over completely...
     def clear_labels(self, layers=None, lines=None, clear_straddlers=False):
         """
         Removes all the gates within the given circuit region.  Does not reduce the number of layers or lines.
@@ -1900,6 +1919,7 @@ class Circuit(object):
         else:
             raise IndexError("Can only delete entire layers or enire lines.")
 
+    # TODO EGN: check behavior - not refactored?
     def to_pythonstr(self, op_labels):
         """
         Convert this circuit to an "encoded" python string.
@@ -1932,6 +1952,7 @@ class Circuit(object):
             c = chr(ord(c) + 1)
         return "".join([translateDict[opLabel] for opLabel in self.layertup])
 
+    # TODO EGN: check behavior - not refactored?
     @classmethod
     def from_pythonstr(cls, python_string, op_labels):
         """
@@ -1966,6 +1987,7 @@ class Circuit(object):
             c = chr(ord(c) + 1)
         return cls(tuple([translateDict[cc] for cc in python_string]))
 
+    # TODO EGN: check behavior - not refactored?
     def serialize(self, expand_subcircuits=False):
         """
         Serialize the parallel gate operations of this Circuit.
@@ -1997,6 +2019,7 @@ class Circuit(object):
             serial_lbls.extend(list(lbl.components) * lbl.reps)
         return Circuit._fastinit(tuple(serial_lbls), self._line_labels, editable=False, occurrence=self.occurrence)
 
+    # TODO EGN: check behavior - not refactored?
     def parallelize(self, can_break_labels=True, adjacent_only=False):
         """
         Compress a circuit's gates by performing them in parallel.
@@ -2083,6 +2106,7 @@ class Circuit(object):
         parallel_lbls = [_Label(lbl_list) if len(lbl_list) != 1 else lbl_list[0] for lbl_list in parallel_lbls]
         return Circuit._fastinit(tuple(parallel_lbls), self._line_labels, editable=False, occurrence=self._occurrence_id)
 
+    # TODO EGN: check behavior - not refactored?
     def expand_subcircuits_inplace(self):
         """
         Expands all :class:`CircuitLabel` labels within this circuit.
@@ -2118,6 +2142,7 @@ class Circuit(object):
             #loop back through the circuit and see if we need to take another pass.
             subcircs_to_expand = self._subcircuits_to_expand()                
 
+    # TODO EGN: check behavior - not refactored?
     def _subcircuits_to_expand(self):
         #Return this as a list of sparse list of tuples, giving only the layers which
         #contain CircuitLabels to be expanded. The first entry of the tuple will be the
@@ -2130,6 +2155,7 @@ class Circuit(object):
                 subckts_to_expand.append(tuple([i]+subckts_to_expand_for_layer))
         return subckts_to_expand
         
+    # TODO EGN: check behavior - not refactored?
     def expand_subcircuits(self):
         """
         Returns a new circuit with :class:`CircuitLabel` labels expanded.
@@ -2143,6 +2169,7 @@ class Circuit(object):
         if self._static: cpy.done_editing()
         return cpy
 
+    # TODO EGN: check behavior - not refactored?
     def factorize_repetitions_inplace(self):
         """
         Attempt to replace repeated sub-circuits with :class:`CircuitLabel` objects.
@@ -2238,6 +2265,7 @@ class Circuit(object):
 
         self.insert_labels_into_layers_inplace([circuit_layer], j)
 
+    # TODO EGN: check behavior - not refactored?
     def insert_circuit(self, circuit, j):
         """
         Inserts a circuit into this circuit, returning a copy.
@@ -2266,6 +2294,7 @@ class Circuit(object):
         if self._static: cpy.done_editing()
         return cpy
 
+    # TODO EGN: check behavior - not refactored?
     def insert_circuit_inplace(self, circuit, j):
         """
         Inserts a circuit into this circuit.
@@ -2338,6 +2367,7 @@ class Circuit(object):
         assert(not self._static), "Cannot edit a read-only circuit!"
         self.insert_circuit_inplace(circuit, self.num_layers)
 
+    # TODO EGN: check behavior - not refactored?
     def prefix_circuit(self, circuit):
         """
         Prefix a circuit to the beginning of this circuit, returning a copy.
@@ -2356,6 +2386,7 @@ class Circuit(object):
         """
         return self.insert_circuit(circuit, 0)
 
+    # TODO EGN: check behavior - not refactored?
     def prefix_circuit_inplace(self, circuit):
         """
         Prefix a circuit to the beginning of this circuit.
@@ -2375,6 +2406,7 @@ class Circuit(object):
         assert(not self._static), "Cannot edit a read-only circuit!"
         self.insert_circuit_inplace(circuit, 0)
 
+    # TODO EGN: check behavior - not refactored?
     def tensor_circuit_inplace(self, circuit, line_order=None):
         """
         The tensor product of this circuit and `circuit`.
@@ -2429,6 +2461,7 @@ class Circuit(object):
         self.insert_labels_as_lines_inplace(circuit._labels, line_labels=circuit.line_labels)
         self._line_labels = new_line_labels  # essentially just reorders labels if needed
 
+    # TODO EGN: check behavior - not refactored?
     def tensor_circuit(self, circuit, line_order=None):
         """
         The tensor product of this circuit and `circuit`, returning a copy.
@@ -2499,6 +2532,7 @@ class Circuit(object):
         if self._static: cpy.done_editing()
         return cpy
 
+    # TODO EGN: check behavior - not refactored?
     def replace_gatename_inplace(self, old_gatename, new_gatename):
         """
         Changes the *name* of a gate throughout this Circuit.
@@ -2533,6 +2567,7 @@ class Circuit(object):
 
         self._labels = replace(self._labels)
 
+    # TODO EGN: check behavior - not refactored?
     def replace_gatename(self, old_gatename, new_gatename):
         """
         Returns a copy of this Circuit except that `old_gatename` is changed to `new_gatename`.
@@ -2564,6 +2599,7 @@ class Circuit(object):
             return Circuit([lbl.replace_name(old_gatename, new_gatename)
                             for lbl in self._labels], self._line_labels, occurrence=self._occurrence_id)
 
+    # TODO EGN: check behavior - not refactored?
     def replace_gatename_with_idle_inplace(self, gatename):
         """
         Treats a given gatename as an idle gate throughout this Circuit.
@@ -2594,6 +2630,7 @@ class Circuit(object):
 
         self._labels = replace(self._labels)
 
+    # TODO EGN: check behavior - not refactored?
     def replace_gatename_with_idle(self, gatename):
         """
         Returns a copy of this Circuit with a given gatename treated as an idle gate.
@@ -2616,6 +2653,7 @@ class Circuit(object):
         if self._static: cpy.done_editing()
         return cpy
 
+    # TODO EGN: check behavior - not refactored?
     def replace_layer(self, old_layer, new_layer):
         """
         Returns a copy of this Circuit except that `old_layer` is changed to `new_layer`.
@@ -2647,6 +2685,7 @@ class Circuit(object):
                            occurrence=self._occurrence_id, 
                            compilable_layer_indices=self._compilable_layer_indices_tup)
 
+    # TODO EGN: check behavior - not refactored?
     def replace_layers_with_aliases(self, alias_dict):
         """
         Performs a find and replace using layer aliases.
@@ -2674,6 +2713,7 @@ class Circuit(object):
                 layers = layers[:i] + c._labels + layers[i + 1:]
         return Circuit._fastinit(layers, self._line_labels, editable=False, occurrence=self._occurrence_id)
 
+    # TODO EGN: check behavior - not refactored?
     def change_gate_library(self, compilation, allowed_filter=None, allow_unchanged_gates=False, depth_compression=True,
                             one_q_gate_relations=None):
         """
@@ -2780,6 +2820,7 @@ class Circuit(object):
         if depth_compression:
             self.compress_depth_inplace(one_q_gate_relations=one_q_gate_relations, verbosity=0)
 
+    # TODO EGN: check behavior - not refactored?
     def map_names_inplace(self, mapper):
         """
         The names of all of the simple labels are updated in-place according to the mapping function `mapper`.
@@ -2814,6 +2855,7 @@ class Circuit(object):
             return newobj
         self._labels = map_names(self._labels)
 
+    # TODO EGN: check behavior - not refactored?
     def map_state_space_labels_inplace(self, mapper):
         """
         The labels of all of the lines (wires/qubits) are updated according to the mapping function `mapper`.
@@ -2847,6 +2889,7 @@ class Circuit(object):
             return newobj
         self._labels = map_sslbls(self._labels)
 
+    # TODO EGN: check behavior - not refactored?
     def map_state_space_labels(self, mapper):
         """
         Creates a new Circuit whose line labels are updated according to the mapping function `mapper`.
@@ -2868,6 +2911,7 @@ class Circuit(object):
         return Circuit([l.map_state_space_labels(mapper_func) for l in self.layertup],
                        mapped_line_labels, None, not self._static, occurrence=self._occurrence_id)
 
+    # TODO EGN: check behavior - not refactored?
     def reorder_lines_inplace(self, order):
         """
         Reorders the lines (wires/qubits) of the circuit.
@@ -2888,6 +2932,7 @@ class Circuit(object):
         assert(set(order) == set(self._line_labels)), "The line labels must be the same!"
         self._line_labels = tuple(order)
 
+    # TODO EGN: check behavior - not refactored?
     def reorder_lines(self, order):
         """
         Reorders the lines (wires/qubits) of the circuit, returning a copy.
@@ -2969,6 +3014,7 @@ class Circuit(object):
             return tuple([x for x in self._line_labels
                           if x not in all_sslbls])  # preserve order
 
+    # TODO EGN: check behavior - not refactored?
     def delete_idling_lines_inplace(self, idle_layer_labels=None):
         """
         Removes from this circuit all lines that are idling at every layer.
@@ -3005,6 +3051,7 @@ class Circuit(object):
         self._line_labels = tuple([x for x in self._line_labels
                                    if x in all_sslbls])  # preserve order
 
+    # TODO EGN: check behavior - not refactored?
     def delete_idling_lines(self, idle_layer_labels=None):
         """
         Removes from this circuit all lines that are idling at every layer,
@@ -3027,6 +3074,7 @@ class Circuit(object):
         if self._static: cpy.done_editing()
         return cpy
 
+    # TODO EGN: check behavior - not refactored?
     def replace_with_idling_line_inplace(self, line_label, clear_straddlers=True):
         """
         Converts the specified line to an idling line, by removing all its gates.
@@ -3051,6 +3099,7 @@ class Circuit(object):
         assert(not self._static), "Cannot edit a read-only circuit!"
         self.clear_labels(lines=line_label, clear_straddlers=clear_straddlers)
 
+    # TODO EGN: check behavior - not refactored?
     def reverse_inplace(self):
         """
         Reverses the order of the circuit.
@@ -3068,6 +3117,7 @@ class Circuit(object):
             self._compilable_layer_indices_tup = \
                 tuple([(depth - 1 - i) for i in self._compilable_layer_indices_tup])
 
+    # TODO EGN: check behavior - not refactored?
     def _combine_one_q_gates_inplace(self, one_q_gate_relations):
         """
         Compresses sequences of 1-qubit gates in the circuit, using the provided gate relations.
@@ -3162,6 +3212,7 @@ class Circuit(object):
         # returns the flag that tells us whether the algorithm achieved anything.
         return compression_implemented
 
+    # TODO EGN: check behavior - not refactored?
     def _shift_gates_forward_inplace(self):
         """
         Shift all gates forward (left) as far as is possible.
@@ -3208,6 +3259,7 @@ class Circuit(object):
         # Only return the bool if requested
         return compression_implemented
 
+    # TODO EGN: check behavior - not refactored?
     def delete_idle_layers_inplace(self):
         """
         Deletes all layers in this circuit that contain no gate operations.
@@ -3228,6 +3280,7 @@ class Circuit(object):
         self.delete_layers(inds_to_remove)
         return bool(len(inds_to_remove) > 0)  # whether compression was implemented
 
+    # TODO EGN: check behavior - not refactored?
     def compress_depth_inplace(self, one_q_gate_relations=None, verbosity=0):
         """
         Compresses the depth of this circuit using very simple re-write rules.
@@ -3285,6 +3338,7 @@ class Circuit(object):
                 print("  - Circuit unchanged by depth compression algorithm")
             print("  - Circuit depth after compression is {}".format(self.num_layers))
 
+    # TODO EGN: check behavior - not refactored?
     def layer(self, j):
         """
         Returns a tuple of the *components*, i.e. the (non-identity) gates, in the layer at depth `j`.
@@ -3304,6 +3358,7 @@ class Circuit(object):
         """
         return tuple(self.layer_label(j).components)
 
+    # TODO EGN: check behavior - not refactored?
     def layer_label(self, j):
         """
         Returns the layer, as a :class:`Label`, at depth j.
@@ -3345,6 +3400,7 @@ class Circuit(object):
         """
         return tuple(self.layer_label_with_idles(j, idle_gate_name).components)
 
+    # TODO EGN: check behavior - not refactored?
     def layer_label_with_idles(self, j, idle_gate_name='I'):
         """
         Returns the layer, as a :class:`Label`, at depth j, with `idle_gate_name` at empty circuit locations.
@@ -3455,6 +3511,7 @@ class Circuit(object):
 
         return sum([size(layer_lbl) for layer_lbl in self._labels])
 
+    # TODO EGN: check behavior - not refactored?
     @property
     def duration(self):
         # similar to depth()
@@ -3463,6 +3520,7 @@ class Circuit(object):
         else:
             return sum([_Label(layer_lbl).time for layer_lbl in self._labels])
 
+    # TODO EGN: check behavior - not refactored?
     def two_q_gate_count(self):
         """
         The number of two-qubit gates in the circuit.
@@ -3477,6 +3535,7 @@ class Circuit(object):
         """
         return self.num_nq_gates(2)
 
+    # TODO EGN: check behavior - not refactored?
     @property
     def num_gates(self):
         """
@@ -3501,6 +3560,7 @@ class Circuit(object):
 
         return sum([cnt(layer_lbl) for layer_lbl in self._labels])
 
+    # TODO EGN: check behavior - not refactored?
     def num_nq_gates(self, nq):
         """
         The number of `nq`-qubit gates in the circuit.
@@ -3534,6 +3594,7 @@ class Circuit(object):
 
         return sum([cnt(layer_lbl) for layer_lbl in self._labels])
 
+    # TODO EGN: check behavior - not refactored?
     @property
     def num_multiq_gates(self):
         """
@@ -3561,7 +3622,8 @@ class Circuit(object):
                     return sum([cnt(sub) for sub in obj])
 
         return sum([cnt(layer_lbl) for layer_lbl in self._labels])
-    
+
+    # TODO EGN: check behavior - not refactored?
     def _togrid(self, identity_name):
         """ return a list-of-lists rep? """
         d = self.num_layers
@@ -3585,6 +3647,7 @@ class Circuit(object):
                     line_items[lineIndx][ilayer] = comp_label
         return line_items
 
+    # TODO EGN: HERE and below - not refactored, need to manually move.
     def __str__(self):
         """
         A text rendering of the circuit.
