@@ -12,6 +12,7 @@ Utility functions relevant to Lindblad forms and projections
 
 import numpy as _np
 import scipy.sparse as _sps
+import itertools as _itertools
 
 from pygsti.tools.basistools import basis_matrices
 import pygsti.baseobjs as _bo
@@ -490,17 +491,23 @@ def create_lindbladian_term_errorgen(typ, Lm, Ln=None, sparse=False):  # noqa N8
         Lm_dag = _np.conjugate(_np.transpose(Lm))
         Lmdag_Ln = Lm_dag @ Ln
 
-    # Loop through the standard basis as all possible input density matrices
-    for i, rho0 in enumerate(basis_matrices('std', d2)):  # rho0 == input density mx
+    # Loop through the standard basis as all possible input density matrices (rho0 == input density mx)
+    #for i, rho0 in enumerate(basis_matrices('std', d2)):  # memory inefficient!!
+    rho0 = _np.zeros((d, d), dtype=Lm.dtype); lasti = 0; lastj = 0
+    for i,j in _itertools.product(range(d), range(d)):  # only construct one basis element at a time to save memory
+        rho0[lasti, lastj] = 0.0
+        rho0[i, j] = 1.0
+
         # Only difference between H/S/C/A is how they transform input density matrices
         if typ == 'H':
             rho1 = -1j * (Lm @ rho0 - rho0 @ Lm)
         elif typ == 'O':
             rho1 = Ln @ rho0 @ Lm_dag - 0.5 * (Lmdag_Ln @ rho0 + rho0 @ Lmdag_Ln)
         else: raise ValueError("Invalid lindblad term errogen type!")
-        lind_errgen[:, i] = rho1.ravel()
+        lind_errgen[:, i*d + j] = rho1.ravel()
         # ^ That line used to branch based on the value of sparse, but both branches
         #   produced the same result.
+        lasti, lastj = i, j
 
     if sparse:
         lind_errgen = lind_errgen.tocsr()
