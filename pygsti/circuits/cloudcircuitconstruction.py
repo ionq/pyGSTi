@@ -2400,7 +2400,7 @@ def _check_kcoverage_template(rows, n, k, verbosity=0):
         if verbosity > 1: print(" - checking cols %s" % str(cols_to_check))
         for perm in _itertools.permutations(range(k), k):
             for m, row in enumerate(rows):
-                if all([row[i] == perm[i] for i in range(k)]):
+                if all([row[cols_to_check[i]] == perm[i] for i in range(k)]):
                     if verbosity > 2: print("  - perm %s: found at row %d" % (str(perm), m))
                     break
             else:
