@@ -14,6 +14,7 @@ import warnings as _warnings
 import collections as _collections
 import itertools as _itertools
 import numpy as _np
+from typing import Literal
 
 from pygsti.models.stencillabel import StencilLabel as _StencilLabel
 from pygsti.tools import listtools as _lt
@@ -24,7 +25,7 @@ from pygsti.modelmembers.operations.lindbladcoefficients import LindbladCoeffici
 from pygsti.baseobjs.basis import Basis as _Basis
 from pygsti.baseobjs.basis import BuiltinBasis as _BuiltinBasis
 from pygsti.circuits.circuitparser import CircuitParser as _CircuitParser
-
+from pygsti.baseobjs.errorgenlabel import LocalElementaryErrorgenLabel as _LocalElementaryErrorgenLabel
 
 class ModelNoise(object):
     """
@@ -1027,9 +1028,10 @@ class LindbladNoise(OpNoise):
 
         return cls(elementary_errorgens, parameterization)
 
-    def __init__(self, error_coeffs, parameterization='auto'):
+    def __init__(self, error_coeffs, parameterization='auto', errorgen_type: Literal['single', 'composed_by_support']='single'):
         self.error_coeffs = error_coeffs  # keys are LocalElementaryErrorgenLabel objects
         self.parameterization = parameterization
+        self.errorgen_type = errorgen_type
 
     def create_errorgen(self, evotype, state_space):
         """
@@ -1048,11 +1050,32 @@ class LindbladNoise(OpNoise):
         LinearOperator
         """
         # Build LindbladErrorgen directly to have control over which parameters are set (leads to lower param counts)
-        basis_size = state_space.dim  # e.g. 4 for a single qubit
-        basis = _BuiltinBasis('PP', basis_size)
-        return _op.LindbladErrorgen.from_elementary_errorgens(
-            self.error_coeffs, self.parameterization, basis, mx_basis='pp',
-            truncate=False, evotype=evotype, state_space=state_space)
+        if self.errorgen_type == 'composed_by_support':
+            # Build a composed errorgen where each component is supported on the basis element(s) of its corresponding coefficient
+            assert state_space.qubit_labels == tuple(range(state_space.num_qubits))
+            
+            coeffs_by_support = _collections.defaultdict(dict)
+            for coeff_lbl, coeff in self.error_coeffs.items():
+                coeff_lbl = _LocalElementaryErrorgenLabel.cast(coeff_lbl)
+                support = coeff_lbl.support_indices()
+                coeffs_by_support[support].update({coeff_lbl.restrict_to(support): coeff})
+
+            errgens = []
+            for support, error_coeffs in coeffs_by_support.items():
+                basis = _BuiltinBasis('PP', 4**len(support))  # basis for the local space supported by this errorgen
+                local_space = state_space.create_subspace(support)
+                local_errgen = _op.LindbladErrorgen.from_elementary_errorgens(
+                        error_coeffs, self.parameterization, basis, mx_basis='pp',
+                        truncate=False, evotype=evotype, state_space=local_space)
+                errgens.append(_op.EmbeddedErrorgen(state_space, support, local_errgen))        
+            return _op.ComposedErrorgen(errgens, evotype, state_space) if len(errgens) > 1 else errgens[0]  
+
+        elif self.errorgen_type == 'single':
+            basis_size = state_space.dim  # e.g. 4 for a single qubit, 4^n for n qubits
+            basis = _BuiltinBasis('PP', basis_size)
+            return _op.LindbladErrorgen.from_elementary_errorgens(
+                self.error_coeffs, self.parameterization, basis, mx_basis='pp',
+                truncate=False, evotype=evotype, state_space=state_space)
 
     def create_errormap(self, evotype, state_space):
         """

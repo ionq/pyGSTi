@@ -15,6 +15,7 @@ import itertools as _itertools
 import warnings as _warnings
 from os import stat
 from pygsti.modelmembers.instruments.instrument import Instrument
+from typing import Literal
 
 import numpy as _np
 import scipy as _scipy
@@ -758,7 +759,7 @@ def create_explicit_model(processor_spec, custom_gates=None,
 
     modelnoise = _build_modelnoise_from_args(depolarization_strengths, stochastic_error_probs, lindblad_error_coeffs,
                                              depolarization_parameterization, stochastic_parameterization,
-                                             lindblad_parameterization, allow_nonlocal=True)
+                                             lindblad_parameterization, allow_nonlocal=True, errorgen_type='single')
 
     return _create_explicit_model(processor_spec, modelnoise, custom_gates, evotype,
                                   simulator, ideal_gate_type, ideal_spam_type, ideal_spam_type, embed_gates, basis)
@@ -1551,7 +1552,7 @@ def create_crosstalk_free_model(processor_spec, custom_gates=None,
                                 evotype="default", simulator="auto", on_construction_error='raise',
                                 independent_gates=False, independent_spam=True, ensure_composed_gates=False,
                                 ideal_gate_type='auto', ideal_spam_type='computational', implicit_idle_mode='none',
-                                basis='pp'):
+                                basis='pp', errorgen_type: Literal['single', 'composed_by_support'] = 'single'):
     """
     Create a n-qudit "crosstalk-free" model.
 
@@ -1695,7 +1696,7 @@ def create_crosstalk_free_model(processor_spec, custom_gates=None,
     """
     modelnoise = _build_modelnoise_from_args(depolarization_strengths, stochastic_error_probs, lindblad_error_coeffs,
                                              depolarization_parameterization, stochastic_parameterization,
-                                             lindblad_parameterization, allow_nonlocal=False)
+                                             lindblad_parameterization, allow_nonlocal=False, errorgen_type=errorgen_type)
 
     return _create_crosstalk_free_model(processor_spec, modelnoise, custom_gates, evotype,
                                         simulator, on_construction_error, independent_gates, independent_spam,
@@ -1887,7 +1888,7 @@ def create_cloud_crosstalk_model(processor_spec, custom_gates=None,
 
     modelnoise = _build_modelnoise_from_args(depolarization_strengths, stochastic_error_probs, lindblad_error_coeffs,
                                              depolarization_parameterization, stochastic_parameterization,
-                                             lindblad_parameterization, allow_nonlocal=True)
+                                             lindblad_parameterization, allow_nonlocal=True, errorgen_type='single')
 
     return _create_cloud_crosstalk_model(processor_spec, modelnoise, custom_gates, evotype,
                                          simulator, independent_gates, independent_spam, errcomp_type,
@@ -2284,7 +2285,7 @@ def _build_weight_maxhops_modelnoise(target_sslbls, weight_maxhops_tuples, lnd_p
 
 def _build_modelnoise_from_args(depolarization_strengths, stochastic_error_probs, lindblad_error_coeffs,
                                 depolarization_parameterization, stochastic_parameterization, lindblad_parameterization,
-                                allow_nonlocal):
+                                allow_nonlocal, errorgen_type):
 
     modelnoises = []
     if depolarization_strengths is not None:
@@ -2310,7 +2311,7 @@ def _build_modelnoise_from_args(depolarization_strengths, stochastic_error_probs
     if lindblad_error_coeffs is not None:
 
         if not allow_nonlocal:  # the easy case
-            modelnoises.append(_OpModelPerOpNoise({lbl: _LindbladNoise(val, lindblad_parameterization)
+            modelnoises.append(_OpModelPerOpNoise({lbl: _LindbladNoise(val, lindblad_parameterization, errorgen_type=errorgen_type)
                                                    for lbl, val in lindblad_error_coeffs.items()}))
         else:  # then need to process labels like ('H', 'XX:0,1') or 'HXX:0,1'
             def process_stencil_labels(flat_lindblad_errs):
