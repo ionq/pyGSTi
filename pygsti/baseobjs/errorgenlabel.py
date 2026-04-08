@@ -147,6 +147,23 @@ class LocalElementaryErrorgenLabel(ElementaryErrorgenLabel):
                                    if any([bel[i] != identity_label for bel in self.basis_element_labels])]
 
         return tuple(nonidentity_indices)
+    
+    def restrict_to(self, indices):
+        """
+        Creates a new LocalElementaryErrorgenLabel with the same errorgen_type and basis_element_labels
+        but with the support restricted to the indices in `indices`.
+
+        Parameters
+        ----------
+        indices : tuple or list
+            A set of indices specifying the subset of the basis element labels to retain.
+
+        Returns
+        -------
+        LocalElementaryErrorgenLabel
+        """
+        bels = [''.join([bel[i] for i in indices]) for bel in self.basis_element_labels]
+        return LocalElementaryErrorgenLabel(self.errorgen_type, bels)
 
 
 class GlobalElementaryErrorgenLabel(ElementaryErrorgenLabel):
