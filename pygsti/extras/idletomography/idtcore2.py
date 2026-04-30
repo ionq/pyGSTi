@@ -17,9 +17,11 @@ from abc import ABC, abstractmethod
 #import scipy
 import scipy.linalg as _spl
 from torch import mode
+from pygsti.baseobjs.opcalc import bulk_eval_compact_polynomials, bulk_eval_compact_polynomials_derivs
 import stim as _stim
 
 import numpy as _np
+from scipy.optimize import least_squares
 
 import pygsti.baseobjs as _baseobjs
 from pygsti.baseobjs.nicelyserializable import NicelySerializable as _NicelySerializable
@@ -41,6 +43,13 @@ from pygsti.baseobjs.polynomial import Polynomial as _Polynomial
 #type PauliBasisMap = dict[str, tuple[str, ...]] # if using Python 3.12+
 PauliBasisMap = dict[str, tuple[str, ...]]
 LEEL = LocalElementaryErrorgenLabel
+
+# for GST-like idle tomography analysis
+from pygsti.processors.processorspec import QubitProcessorSpec as _QubitProcessorSpec
+from pygsti.models.modelconstruction import create_crosstalk_free_model
+
+from pygsti.baseobjs.polynomial import compact_polynomial_list
+from pygsti.baseobjs.opcalc import bulk_eval_compact_polynomials
 
 # from pygsti.errorgenpropagation.errorpropagator import ErrorGeneratorPropagator
 
@@ -448,7 +457,9 @@ class IdleTomographyExperimentDesign(CircuitListsDesign):
         expectation_polys = []
         for alpha_row in alphas_by_pauli:
             nonzero_alpha_polys = [errorgen_polys_by_label[errorgen_labels[idx]].scalar_mult(alpha_row[idx]) for idx in alpha_row.nonzero()[0]]
-            expectation_polys.append(_Polynomial.sum(nonzero_alpha_polys))
+            p = (_Polynomial.sum(nonzero_alpha_polys) if len(nonzero_alpha_polys) > 0 
+                 else _Polynomial.from_variable_and_coefficient_lists(variables=[()], coefficients=[0.0], max_num_vars=len(errorgen_labels)))
+            expectation_polys.append(p)
         return expectation_polys
     
     def compute_extrinsic_polynomials(self, taylor_order: int, verbosity: int | VerbosityPrinter = 0):
@@ -479,7 +490,7 @@ class IdleTomographyExperimentDesign(CircuitListsDesign):
             nq_meas_on_targets = [_stim.PauliString(nq_meas.identity_except_on_qubits(qs).rep) for qs in qubits_to_measure_list]
             prep_tableau = _get_prep_tableau(nq_prep, self.prep_fiducial_map, cache=cache)
         
-            for k, taylor_poly in enumerate(taylor_polys):
+            for k, taylor_poly in enumerate(taylor_polys): # k == taylor-order
                 expectation_polys = self._bulk_pauli_expectations(taylor_poly, prep_tableau, nq_meas_on_targets)
                 for qm, ep in zip(qubits_to_measure_list, expectation_polys):
                     extrinsic_polys[(nq_prep, nq_meas, qm)].append(ep)  # appends in taylor-order ordering
@@ -518,9 +529,29 @@ class IdleTomographyCircuitBuilder(_NicelySerializable):
                 idle_germ: str = "Gidle",
                 seed: int = 42,
                 mode: Literal['bruteRank', 'compactEVD'] = 'compactEVD',
+                rank_tol: float = 1e-10,
                 verbosity: int = 0):
         (fiducial_pairs, pauli_pair_to_fidpair_map, jacobian) = \
-            cls._find_fiducials_random(eegs_to_probe, prep_fiducial_map, seed, mode, verbosity=verbosity)
+            cls._find_fiducials_random(eegs_to_probe, prep_fiducial_map, seed, mode, rank_tol, verbosity=verbosity)
+        return cls(eegs_to_probe, prep_fiducial_map, meas_fiducial_map, idle_germ,
+                    fiducial_pairs, pauli_pair_to_fidpair_map, jacobian)
+    
+    @classmethod
+    def create_brute(cls, eegs_to_probe: list[LocalElementaryErrorgenLabel],
+                prep_fiducial_map: PauliBasisMap,
+                meas_fiducial_map: PauliBasisMap, 
+                idle_germ: str = "Gidle",
+                mode: Literal['bruteRank', 'compactEVD'] = 'compactEVD',
+                verbosity: int = 0):
+        (fiducial_pairs, pauli_pairs, jacobian, _) = \
+            cls._find_fiducials_brute(eegs_to_probe, prep_fiducial_map, tile=False, mode=mode, verbosity=verbosity)
+        
+        pauli_pair_to_fidpair_map = {}
+        _, _, max_eeg_weight = get_eeg_types_num_qubits_and_max_weight(eegs_to_probe)
+        for (prep, full_wt_meas) in fiducial_pairs:
+            prep_meas_pairs = [(prep, meas) for meas in meas_fidpair_to_meas_paulis(full_wt_meas, max_meas_wt=max_eeg_weight)]
+            pauli_pair_to_fidpair_map.update({pp: (prep, full_wt_meas, pp[1].support_indices()) for pp in prep_meas_pairs})
+
         return cls(eegs_to_probe, prep_fiducial_map, meas_fiducial_map, idle_germ,
                     fiducial_pairs, pauli_pair_to_fidpair_map, jacobian)
     
@@ -531,17 +562,18 @@ class IdleTomographyCircuitBuilder(_NicelySerializable):
                 idle_germ: str = "Gidle",
                 seed: int = 42,
                 mode: Literal['bruteRank', 'compactEVD'] = 'compactEVD',
+                rank_tol: float = 1e-10,
                 verbosity: int = 0):
         hamiltonian_eegs = [eeg for eeg in eegs_to_probe if eeg.errorgen_type == 'H']
         stochastic_eegs = [eeg for eeg in eegs_to_probe if eeg.errorgen_type != 'H']
 
         (fiducial_pairs, pauli_pair_to_fidpair_map, jacobian) = \
-            cls._find_fiducials_random(hamiltonian_eegs, prep_fiducial_map, seed, mode, verbosity=verbosity)
+            cls._find_fiducials_random(hamiltonian_eegs, prep_fiducial_map, seed, mode, rank_tol, verbosity=verbosity)
         ham_builder = cls(hamiltonian_eegs, prep_fiducial_map, meas_fiducial_map, idle_germ,
                             fiducial_pairs, pauli_pair_to_fidpair_map, jacobian)
         
         (fiducial_pairs, pauli_pair_to_fidpair_map, jacobian) = \
-            cls._find_fiducials_random(stochastic_eegs, prep_fiducial_map, seed, mode, verbosity=verbosity)
+            cls._find_fiducials_random(stochastic_eegs, prep_fiducial_map, seed, mode, rank_tol, verbosity=verbosity)
         stoch_builder = cls(stochastic_eegs, prep_fiducial_map, meas_fiducial_map, idle_germ,
                             fiducial_pairs, pauli_pair_to_fidpair_map, jacobian)
         return ham_builder, stoch_builder
@@ -626,7 +658,8 @@ class IdleTomographyCircuitBuilder(_NicelySerializable):
 
     @staticmethod
     def _find_fiducials_random(eegs_to_probe: list[LocalElementaryErrorgenLabel], prep_fiducial_map: PauliBasisMap,
-                               seed: int = 42, mode: Literal['bruteRank', 'compactEVD'] = 'compactEVD', verbosity: int | VerbosityPrinter = 0):
+                               seed: int = 42, mode: Literal['bruteRank', 'compactEVD'] = 'compactEVD',
+                               rank_tol: float = 1e-10, verbosity: int | VerbosityPrinter = 0):
         printer = VerbosityPrinter.create_printer(verbosity)
         _, eeg_num_qubits, max_eeg_weight = get_eeg_types_num_qubits_and_max_weight(eegs_to_probe)
         num_eegs = len(eegs_to_probe)
@@ -676,6 +709,7 @@ class IdleTomographyCircuitBuilder(_NicelySerializable):
                             fidpairs1Q[(p, m)] += 1
             sorted_fidpairs1Q = dict(sorted(fidpairs1Q.items(), key=lambda x: x[1], reverse=True))
             fidpairs1Q_by_qubit.append(sorted_fidpairs1Q)
+        num_candidates = int(_np.prod([len(fidpairs1Q_by_qubit[i]) for i in range(eeg_num_qubits)]))
 
         print(f"1Q fidpair counts by qubit:")
         for i, fidpairs1Q in enumerate(fidpairs1Q_by_qubit):
@@ -688,57 +722,70 @@ class IdleTomographyCircuitBuilder(_NicelySerializable):
         attempted_fidpairs = set()
         if mode == 'bruteRank':
             jac = _np.zeros((0, num_eegs))  # Initialize an empty Jacobian
+            jac_cond_num = 0
         elif mode == 'compactEVD':
             jtj = _np.zeros((num_eegs, num_eegs))  # Initialize an empty J^T J matrix for compact EVD
             projU = None
             jac_rows_to_concat = []  # Keep track of the Jacobian rows corresponding to the added fiducial pairs, to construct the full Jacobian at the end
+            jac_cond_num = 0 # DISABLED for now until we figure out how to compute
         else:
             raise ValueError(f"Unknown mode '{mode}' for finding fiducials!")
         jac_rank = 0
         rng = _np.random.default_rng(seed)
         prep_tableau_cache = {}
 
+        max_condition_number = 10.0  # heuristic threshold for acceptable condition number, to prevent adding fiducial pairs that lead to very ill-conditioned
+        max_candidate_tries = 100
+        failed_condition_number_reduction_attempts = 0
+
         printer.log(f"Attempting to tile support-specific fiducials to achieve Jacobian of rank {num_eegs} on {eeg_num_qubits} qubits...")
-        while jac_rank < num_eegs and len(attempted_fidpairs) < 1000:
+        while ((jac_rank < num_eegs or jac_cond_num > max_condition_number) 
+               and failed_condition_number_reduction_attempts < 20 and len(attempted_fidpairs) < 1000):
             # construct candidate fiducial pair by combining 1Q fidpairs for each qubit, prioritizing those that appear most frequently in the base fidpairs
-            
-            candidate_fidpair = None; ntries = 0
-            while not candidate_fidpair:        
+            ntries = 0
+            while ntries < max_candidate_tries:        
                 component_fidpairs = [rng.choice(list(fidpairs1Q_by_qubit[i].keys())) for i in range(eeg_num_qubits)]
                 candidate_prep = NQPauliState(''.join(p.rep[0] for p, _ in component_fidpairs), tuple(p.signs[0] for p, _ in component_fidpairs))
                 candidate_meas = NQPauliOp(''.join(m.rep[0] for _, m in component_fidpairs))
                 candidate_fidpair = (candidate_prep, candidate_meas)
-                if candidate_fidpair in attempted_fidpairs:
-                    candidate_fidpair = None  # already have this one, try again
-                    ntries += 1
-                    if ntries > 100:  # prevent infinite loop
-                        raise RuntimeError("Unable to find a new candidate fiducial pair after 100 tries.")
-                else:
+                if candidate_fidpair not in attempted_fidpairs:
                     attempted_fidpairs.add(candidate_fidpair)
-
+                    break  # this is a new candidate, proceed to evaluate it
+                ntries += 1
+            else:
+                if len(attempted_fidpairs) == num_candidates:
+                    printer.log("Exhausted all possible candidate fiducial pairs!")
+                else:
+                    printer.log(f"Unable to find a new candidate fiducial pair after {max_candidate_tries} tries.")
+                break # exit the loop if we can't find a new candidate
+                    
             (prep, full_wt_meas) = candidate_fidpair
             prep_meas_pairs = [(prep, meas_pauli) for meas_pauli in meas_fidpair_to_meas_paulis(full_wt_meas, max_meas_wt=max_eeg_weight)
                                     if (prep, meas_pauli) not in pauli_pair_to_fidpair_map] # only add pairs we haven't already added to the jacobian
             jac_rows_for_fidpair = construct_jacobian(eegs_to_probe, prep_meas_pairs, prep_fiducial_map, prep_tableau_cache)
             if mode == 'bruteRank':
                 test_jac = _np.concatenate((jac, jac_rows_for_fidpair), axis=0)
-                rank = _np.linalg.matrix_rank(test_jac)
+                rank = _np.linalg.matrix_rank(test_jac, tol=rank_tol)                
+                cond_num = _np.linalg.cond(test_jac) if rank == num_eegs else 0
             elif mode == 'compactEVD':
                 low_rank_rep = IdleTomographyCircuitBuilder._low_rank_rep(jac_rows_for_fidpair)
                 if projU is not None:                    
-                    rank = jac_rank + IdleTomographyCircuitBuilder._rank_increase_from_update(low_rank_rep, projU, evd_tol=1e-10)
+                    rank = jac_rank + IdleTomographyCircuitBuilder._rank_increase_from_update(low_rank_rep, projU, evd_tol=rank_tol)
                 else:
                     assert jac_rank == 0, "If projU is None, then jac_rank should be 0!"
                     rank = low_rank_rep.shape[1]  # if jac_rank is 0, then the rank increase is just the rank of the new low-rank representation
+                cond_num = 0  # DISABLED for now
             else:
                 raise ValueError(f"Unknown mode '{mode}' for finding fiducials!")
 
-            if rank > jac_rank:
-                printer.log(f"Adding pair (attempt {len(attempted_fidpairs)}): {prep}/{full_wt_meas}  rank: {jac_rank} => {rank} <? {num_eegs}", 2)
+            if rank > jac_rank or (jac_rank == num_eegs and cond_num < 0.99*jac_cond_num):
+                printer.log(f"Adding pair (attempt {len(attempted_fidpairs)}): {prep}/{full_wt_meas}  rank: {jac_rank} => {rank} <? {num_eegs} [cond={cond_num:.2g}]", 2)
                 fidpairs.append(candidate_fidpair)
                 pauli_pairs.extend(prep_meas_pairs)
                 pauli_pair_to_fidpair_map.update({pp: (prep, full_wt_meas, pp[1].support_indices()) for pp in prep_meas_pairs})
                 jac_rank = rank
+                jac_cond_num = cond_num
+                failed_condition_number_reduction_attempts = 0
 
                 if mode == 'bruteRank':
                     jac = test_jac
@@ -749,9 +796,14 @@ class IdleTomographyCircuitBuilder(_NicelySerializable):
                     assert rank_check == jac_rank, f"Rank check failed!  Expected rank {jac_rank} but got {rank_check} from compact EVD of J^T J!"
                 else:
                     raise ValueError(f"Unknown mode '{mode}' for finding fiducials!")
+            
+            elif jac_rank == num_eegs:            
+                failed_condition_number_reduction_attempts += 1
   
         if jac_rank < num_eegs:
             printer.log(f"Could not find full-rank Jacobian (rank {jac_rank} < {num_eegs}) in {len(attempted_fidpairs)} attempted fiducial pairs.")
+        elif jac_cond_num > max_condition_number:
+            printer.log(f"Found full-rank Jacobian after {len(attempted_fidpairs)} attempted fiducial pairs, but condition number is {jac_cond_num:.2e} > {max_condition_number}.")
         else:
             printer.log(f"Full rank ({num_eegs}) achieved with {len(fidpairs)} fiducial pairs after {len(attempted_fidpairs)} attempts.")
         
@@ -1048,14 +1100,17 @@ class IdleTomographyCircuitBuilder(_NicelySerializable):
 
         # Create circuits for each fidpair and L
         circuits_by_L, fidpair_to_circuits_map = self._create_circuits_for_fidpairs(self.fiducial_pairs, Ls)
+        accum_circuits_by_L = list(itertools.accumulate(circuits_by_L))
+        accum_circuits_by_L = [accum_circuits_by_L[-1]] # try this
         printer.log(f"Created {sum([len(lst) for lst in circuits_by_L])} unique circuits for {len(self.fiducial_pairs)} fidpairs and {len(Ls)} L values.")
+
 
         extrinsic_rate_circuits = {}
         for pauli_pair in self.pauli_pairs:
             nq_prep, nq_meas, measure_on = self.pauli_pair_to_fidpair_map[pauli_pair]
             extrinsic_rate_circuits[(nq_prep, nq_meas, measure_on)] = fidpair_to_circuits_map[(nq_prep, nq_meas)]
 
-        return IdleTomographyExperimentDesign(circuits_by_L, self.fiducial_pairs, fidpair_to_circuits_map,
+        return IdleTomographyExperimentDesign(accum_circuits_by_L, self.fiducial_pairs, fidpair_to_circuits_map,
                                             extrinsic_rate_circuits, Ls, self.eegs_to_probe, 
                                             self.prep_fiducial_map, self.meas_fiducial_map, self.jacobian)
 
@@ -1101,6 +1156,7 @@ def noise_free_parity(prep: NQPauliState, meas: NQPauliOp):
     else:
         return 0.0
 
+
 class IdleTomography(_proto.Protocol):
     """
     The idle tomography protocol.
@@ -1119,14 +1175,15 @@ class IdleTomography(_proto.Protocol):
     """
 
     def __init__(self, prep_fid_map: PauliBasisMap, meas_fid_map: PauliBasisMap, order: int = 1,
-                  fitting_mode: Literal['compare_coefficients', 'compare_expectations'] = 'compare_coefficients', name: str = None, verbosity: int = 0):
+                  fitting_mode: Literal['compare_coefficients', 'compare_expectations', 'compare_significant_expectations'] = 'compare_coefficients',
+                  initial_intrinsic_rates: dict[LEEL, float] | None = None, name: str = None, verbosity: int = 0):
         super().__init__(name)
         self.prep_fid_map = prep_fid_map
         self.meas_fid_map = meas_fid_map
         self.order = order
         self.fitting_mode = fitting_mode    
+        self.initial_intrinsic_rates = initial_intrinsic_rates
         self.verbosity = verbosity
-
     
     def run(self, data, memlimit=None, comm=None):
         """
@@ -1165,77 +1222,275 @@ class IdleTomography(_proto.Protocol):
         # if self.record_output and not printer.is_recording():
         #     printer.start_recording()
 
-        extrinsic_coeffs = {}; intrinsic_rates = {}; jacobians = []
+        extrinsic_coeffs = {}
+        intrinsic_rates = {}
+        jacobians = []
+
+        
+        if self.initial_intrinsic_rates is not None:
+            # check that each initial rate is in at least one edesign's eegs_to_probe, and that there are no duplicates across edesigns
+            initial_intrinsic_rates = {LEEL.cast(eeg): val for eeg, val in self.initial_intrinsic_rates.items()}
+            for eeg, val in initial_intrinsic_rates.items():
+                matches = [(eeg in edesign.eegs_to_probe) for edesign in idt_edesigns]
+                if not any(matches):
+                    raise ValueError("Initial intrinsic rate for %s is not in any edesign's eegs_to_probe!" % eeg)
+                if sum(matches) > 1:
+                    raise ValueError("Initial intrinsic rate for %s appears in multiple edesigns!" % eeg)
+        else:
+            initial_intrinsic_rates = None
+
         for i, edesign in enumerate(idt_edesigns):
             # Note: we could also iterate over sub-datasets corresponding to each edesign
             #  but this shouldn't be necessary.
 
-            printer.log(f"Computing extrinsic rates for edesign {i+1}/{len(idt_edesigns)}...")
-            local_extrinsic_coeffs = self.compute_extrinsic_coeffs(edesign, ds, degree=max(self.order, 1), verbosity=printer - 1)
-
-            assert not set(local_extrinsic_coeffs.keys()).intersection(set(extrinsic_coeffs.keys())), \
-                "Extrinsic rates should be disjoint across different edesigns (since they should be probing different sets of errorgens)!"
-            assert not set(edesign.eegs_to_probe).intersection(set(intrinsic_rates.keys())), \
-                "Intrinsic rates should be disjoint across different edesigns (since they should be probing different sets of errorgens)!"
-        
-            printer.log(f"Computed {len(local_extrinsic_coeffs)} extrinsic fits (for {len(edesign.eegs_to_probe)} intrinsic rates).")
-            if len(local_extrinsic_coeffs) < len(edesign.eegs_to_probe):
-                printer.log(f"WARNING: This should be more than the {len(edesign.eegs_to_probe)} intrinsic rates!!!") 
-
-
-            if self.order < 1:  # DEBUG!!! - this should work for self.order==1 but we want to debug the nonlinear solver first
-                # Compute and use jacobians to convert from extrinsic rates to intrinsic rates
-                #  must consider nonzero alpha (jac element) whenever errorgen has overlap with targets
-                jac = edesign.get_jacobian(printer)
-                jacobians.append(jac)
- 
-                # Compute intrinsic rates using jacobian
-                t1 = time.time()
-                extrinsic_vec = _np.array([coeffs[0] for coeffs in local_extrinsic_coeffs.values()])
-                intrinsic_vec, residuals, solve_rank, solve_sing_vals = _np.linalg.lstsq(jac, extrinsic_vec, rcond=None)
-                local_intrinsic_rates = dict(zip(edesign.eegs_to_probe, intrinsic_vec))
-                printer.log(f"Solved for intrinsic rates in {time.time() - t1:.2f} seconds.  Solve_rank = {solve_rank}, "
-                            f"smallest singular value = {min(solve_sing_vals)}")
-            else:
-                from scipy.optimize import least_squares
+            if self.order == 'inf':  # setup a model
+                num_qubits = len(edesign.qubit_labels)
+                nqubit_pspec = _QubitProcessorSpec(num_qubits, ('Gxpi2', 'Gypi2', 'Gidle'), geometry='line')
+                init_coeffs = {eeg: 0.0 for eeg in edesign.eegs_to_probe}
                 
+                if initial_intrinsic_rates is not None:
+                    for eeg, val in initial_intrinsic_rates.items():
+                        if eeg in init_coeffs:
+                            init_coeffs[eeg] = val
+
+                mdl = create_crosstalk_free_model(nqubit_pspec,
+                    lindblad_parameterization='CPTP' if ('C' in edesign.eeg_types or 'A' in edesign.eeg_types) else 'H+S',
+                    lindblad_error_coeffs={'Gidle': init_coeffs},
+                    simulator="map", errorgen_type="single")
+                assert mdl.num_params == len(edesign.eegs_to_probe), f"Model should have same number of parameters as intrinsic rates being probed!  Expected {len(edesign.eegs_to_probe)}, but model has {mdl.num_params} parameters."                         
+            else:
+                mdl = None
+
+            if self.fitting_mode.startswith('compare_coefficients'):
+                printer.log(f"Computing extrinsic rates for edesign {i+1}/{len(idt_edesigns)}...")
                 if self.fitting_mode == 'compare_coefficients':
+                    fit_degree = self.order # default
+                else:
+                    fit_degree = int(self.fitting_mode.split('_fitdegree')[-1])  # extract degree from fitting mode string
+                local_extrinsic_coeffs = self.compute_extrinsic_coeffs(edesign, ds, degree=fit_degree, verbosity=printer - 1)
+
+                assert not set(local_extrinsic_coeffs.keys()).intersection(set(extrinsic_coeffs.keys())), \
+                    "Extrinsic rates should be disjoint across different edesigns (since they should be probing different sets of errorgens)!"
+                assert not set(edesign.eegs_to_probe).intersection(set(intrinsic_rates.keys())), \
+                    "Intrinsic rates should be disjoint across different edesigns (since they should be probing different sets of errorgens)!"
+            
+                printer.log(f"Computed {len(local_extrinsic_coeffs)} extrinsic fits (for {len(edesign.eegs_to_probe)} intrinsic rates).")
+                if len(local_extrinsic_coeffs) < len(edesign.eegs_to_probe):
+                    printer.log(f"WARNING: This should be more than the {len(edesign.eegs_to_probe)} intrinsic rates!!!") 
+
+                assert self.order != 'inf', "Fitting mode 'compare_coefficients' is not compatible with infinite Taylor order (i.e. direct model fitting)!"
+                
+                if self.order == 0:  # DEBUG!!! - this should work for self.order==1 but we want to debug the nonlinear solver first
+                    # Compute and use jacobians to convert from extrinsic rates to intrinsic rates
+                    #  must consider nonzero alpha (jac element) whenever errorgen has overlap with targets
+                    jac = edesign.get_jacobian(printer)
+                    jacobians.append(jac)
+    
+                    # Compute intrinsic rates using jacobian
+                    t1 = time.time()
+                    extrinsic_vec = _np.array([coeffs[0] for coeffs in local_extrinsic_coeffs.values()])
+                    intrinsic_vec, residuals, solve_rank, solve_sing_vals = _np.linalg.lstsq(jac, extrinsic_vec, rcond=None)
+                    local_intrinsic_rates = dict(zip(edesign.eegs_to_probe, intrinsic_vec))
+                    printer.log(f"Solved for intrinsic rates in {time.time() - t1:.2f} seconds.  Solve_rank = {solve_rank}, "
+                                f"smallest singular value = {min(solve_sing_vals)}")
+                    
+                else:
+                    
                     local_extrinsic_polys = edesign.compute_extrinsic_polynomials(taylor_order=self.order, verbosity=printer)
                     # local_extrinsic_polys[(nq_prep, nq_meas, measure_on)] = list of (order+1) L-power coeffs, given as polynomials
                     #               for nq_meas.restricted_to(measure_on) Pauli expectation after prepping in nq_prep state.
+                    maxL = max(edesign.Ls)
 
-                    def objective(intrinsic_vec):
-                        residuals = []
-                        for coeffs, polys in zip(local_extrinsic_coeffs.values(), local_extrinsic_polys.values()):
-                            # evaluate the polynomial at the given intrinsic rates and compare to the extrinsic coeff
-                            residuals.extend([c - poly.evaluate(intrinsic_vec) for c, poly in zip(coeffs, polys)])
-                        residuals = _np.array(residuals)
-                        assert _np.isreal(residuals).all(), "Residuals should be real!"
-                        return residuals.real
-                    
-                elif self.fitting_mode == 'compare_expectations':
-                    exp_polys = edesign.compute_expectation_polynomials(taylor_order=self.order, verbosity=printer)
-                    exp_values = self.compute_expectation_values(edesign, ds, verbosity=printer - 1)
+                    all_coeffs = _np.array(list(itertools.chain(*local_extrinsic_coeffs.values())))
+                    vtape, ctape = compact_polynomial_list(list(itertools.chain(*local_extrinsic_polys.values())))
+                    scales = _np.array([maxL**(k+1) for k in range(self.order)] * len(local_extrinsic_coeffs))
+                    # scale residuals by L^(k+1) to make resdiduals indicative of how much error there is in the expectation value
+                    wrt_params = _np.arange(len(edesign.eegs_to_probe))
+                    assert(len(scales) == len(all_coeffs))
                     
                     def objective(intrinsic_vec):
-                        residuals = []
-                        for values, polys in zip(exp_values.values(), exp_polys.values()):
-                            # evaluate the polynomial at the given intrinsic rates and compare to the expectation values
-                            residuals.extend([v - poly.evaluate(intrinsic_vec) for v, poly in zip(values, polys)])
-                        residuals = _np.array(residuals)
-                        assert _np.isreal(residuals).all(), "Residuals should be real!"
-                        return residuals.real
-                else:
-                    raise ValueError(f"Unknown fitting mode '{self.fitting_mode}'!")
+                        predicted = bulk_eval_compact_polynomials(vtape, ctape, intrinsic_vec, all_coeffs.shape)
+                        residuals = (all_coeffs - predicted) * scales
+                        return residuals
+                    
+                    # Maybe these need to be able to be complex and they can't be yet?? -- Look into this. It seems the finite diff givse something else...
+                    # TODO: debug this and make sure it matches finite difference jacobian
+                    #def jacobian(intrinsic_vec):
+                    #    return bulk_eval_compact_polynomials_derivs(vtape, ctape, wrt_params, intrinsic_vec, (len(all_coeffs), len(edesign.eegs_to_probe)))
+                    
+                    
+                    # SLOW version for debugging:
+                    # def objective(intrinsic_vec):
+                    #     residuals = []
+                    #     for coeffs, polys in zip(local_extrinsic_coeffs.values(), local_extrinsic_polys.values()):
+                    #         # evaluate the polynomial at the given intrinsic rates and compare to the extrinsic coeff
+                    #         #residuals.extend([c - poly.evaluate(intrinsic_vec) for c, poly in zip(coeffs, polys)])
+                    #         residuals.extend([(c - poly.evaluate(intrinsic_vec))*maxL**(k+1) for k, (c, poly) in enumerate(zip(coeffs, polys))])
+                    #         #residuals.extend([_np.abs(c - poly.evaluate(intrinsic_vec))**(1/(k+1)) for k, (c, poly) in enumerate(zip(coeffs, polys))])
+                    #     residuals = _np.array(residuals)
+                    #     assert _np.isreal(residuals).all(), "Residuals should be real!"
+                    #     return residuals.real
+                    jacobian = None
 
-                t1 = time.time()
-                res = least_squares(objective, x0=_np.zeros(len(edesign.eegs_to_probe), 'd'), verbose=2)
-                local_intrinsic_rates = dict(zip(edesign.eegs_to_probe, res.x))
-                printer.log(f"Solved for intrinsic rates in {time.time() - t1:.2f} seconds.\n"
-                            f" Final cost = {res.cost}, optimality = {res.optimality}, success = {res.success}\n"
-                            f" message = {res.message}")
+                    local_intrinsic_rates = self._intrinsic_rates_via_least_squares_fit(objective, jacobian, edesign, printer, mdl=mdl)
+                    
+            elif self.fitting_mode == 'compare_significant_expectations':
+                # move these to fns later:
+                neegs = len(edesign.eegs_to_probe)
+                taylor_order = self.order
+
+                if taylor_order != 'inf':
+                    errgen_poly_dict = {_LSE.cast(eeg): _Polynomial.from_variable_and_coefficient_lists(variables=[(i,)], coefficients=[1.0], max_num_vars=neegs)
+                                for i, eeg in enumerate(edesign.eegs_to_probe)}
+                    neegs_dummy = {eeg: i for i, eeg in enumerate(edesign.eegs_to_probe)}  # just a mapping from eeg to index for use in the polynomial construction
+                    taylor_polys = epoly.error_generator_taylor_expansion_symbolic_polynomial(errgen_poly_dict, neegs_dummy, order=taylor_order)
+                    assert len(taylor_polys) == taylor_order, f"Expected {taylor_order} Taylor expansion polynomials, but got {len(taylor_polys)}!"
+
+                # Construct parallel lists of expectation values from the data and corresponding polynomials (up to taylor_order)
+                #  for the predicted values.
+                exp_values = []
+                exp_polys = []
+                to_measure_by_circuit = {}
+                from scipy.special import factorial
+
+                cache = {}
+                significance_threshold = 0.00  # only fit expectation values where the signal is above this threshold (compared to ideal expectation) to avoid fitting noise
+                num_considered = 0
+                for (nq_prep, nq_meas), circuits_vs_L in edesign.fidpair_to_circuits_map.items():                        
+                    prep_tableau = _get_prep_tableau(nq_prep, edesign.prep_fiducial_map, cache=cache)
+
+                    for circuit,L in zip(circuits_vs_L, edesign.Ls):
+                        fs = ds[circuit].fractions
+
+                        # Select which parities to measure based on signal in data.
+                        qubit_indices = tuple(range(len(nq_meas)))
+                        qubits_to_measure_list = []
+                        ideal_expectations = []
+                        for wt in range(1, len(qubit_indices)+1):  # TODO: add max_weight limit here?
+                            for qs in itertools.combinations(qubit_indices, wt):
+                                pauli = _stim.PauliString(nq_meas.identity_except_on_qubits(qs).rep)
+                                ideal_expectation = eprop.stabilizer_pauli_expectation(prep_tableau, pauli)
+                                avg_parity = sum([(-1)**parity(outcome[0], qs) * f for outcome, f in fs.items()])
+                                if abs(avg_parity - ideal_expectation) >= significance_threshold: #*L*wt:
+                                    qubits_to_measure_list.append(qs)
+                                    ideal_expectations.append(ideal_expectation)
+                                    exp_values.append(avg_parity)
+                                num_considered += 1
+                        
+                        if taylor_order == 'inf': 
+                            to_measure_by_circuit[circuit] = qubits_to_measure_list # for GST run
+                        else:
+                            # compute expectation paulis for all identified parities
+                            nq_meas_on_targets = [_stim.PauliString(nq_meas.identity_except_on_qubits(qs).rep) for qs in qubits_to_measure_list]
+                            polys_by_L_order_list = [[_Polynomial.from_variable_and_coefficient_lists(variables=[()], coefficients=[ideal_expectation], max_num_vars=neegs)]
+                                            for ideal_expectation in ideal_expectations]  # start with just the ideal expectation as the 0th order term, then add higher order terms from the Taylor expansion below
+                            for k, taylor_poly in enumerate(taylor_polys, start=1): # k == taylor-order
+                                expectation_polys = edesign._bulk_pauli_expectations(taylor_poly, prep_tableau, nq_meas_on_targets)                                
+                                for ep, polys_by_L_order in zip(expectation_polys, polys_by_L_order_list):
+                                    polys_by_L_order.append(ep.scalar_mult(L**k)) # appends in taylor-order ordering
+                            polys_by_qs_to_measure = [_Polynomial.sum(polys_by_L_order) for polys_by_L_order in polys_by_L_order_list]
+                            exp_polys.extend(polys_by_qs_to_measure)  
+                            
+                exp_values = _np.array(exp_values)
+                printer.log(f"{len(edesign.fidpair_to_circuits_map) * len(edesign.Ls)} circuits.")
+                printer.log(f"Constructed {len(exp_values)} significant expectation values and corresponding polynomials for fitting ({num_considered} considered).")
                 
-            extrinsic_coeffs.update(local_extrinsic_coeffs)
+                jacobian = None
+
+                if taylor_order != 'inf':
+                    vtape, ctape = compact_polynomial_list(exp_polys)
+                    wrt_params = _np.arange(len(edesign.eegs_to_probe))
+
+                    def objective(intrinsic_vec):
+                        predictions = bulk_eval_compact_polynomials(vtape, ctape, intrinsic_vec, exp_values.shape)
+                        residuals = predictions - exp_values
+                        return residuals.real
+                    
+                    def jacobian(intrinsic_vec):
+                        return bulk_eval_compact_polynomials_derivs(vtape, ctape, wrt_params, intrinsic_vec, (len(exp_values), len(edesign.eegs_to_probe)))
+                    
+                    # SLOW version for debugging:
+                    # def objective(intrinsic_vec):
+                    #     residuals = _np.array([(v - poly.evaluate(intrinsic_vec)) for v, poly in zip(exp_values, exp_polys)])
+                    #     assert _np.isreal(residuals).all(), "Residuals should be real!"
+                    #     return residuals.real
+                    
+                else: # infinite order == GST.  Use GST model to compute probabilities and expectations for each objective function call
+                    def objective(mdl_param_vec):
+                        mdl.from_vector(mdl_param_vec)
+                        circuits = list(to_measure_by_circuit.keys())
+                        all_probs = mdl.bulk_probabilities(circuits)
+                        predicted = []
+                        for circuit, qubits_to_measure_list in to_measure_by_circuit.items():
+                            probs = all_probs[circuit]
+                            #freqs = ds[circuit].fractions # for comparison/debugging
+                            for to_measure in qubits_to_measure_list:
+                                predicted_parity = sum([(-1)**parity(outcome[0], to_measure) * p for outcome, p in probs.items()])
+                                predicted.append(predicted_parity)
+                        predicted = _np.array(predicted)
+                        residuals = predicted - exp_values
+                        #print(f"Residuals: min {residuals.min():.3g}, max {residuals.max():.3g}, mean {residuals.mean():.3g}, median {_np.median(residuals):.3g}, std {residuals.std():.3g}")
+                        #print(f"Residuals: mean {residuals.mean():.3g}, param norm {_np.linalg.norm(mdl_param_vec):.3g}")
+                        return residuals
+                local_intrinsic_rates = self._intrinsic_rates_via_least_squares_fit(objective, jacobian, edesign, printer, mdl=mdl)
+                
+            elif self.fitting_mode == 'compare_expectations':
+                jacobian = None
+
+                if self.order != 'inf':
+                    exp_values = self.compute_expectation_values(edesign, ds, verbosity=printer - 1)
+                    exp_polys = edesign.compute_expectation_polynomials(taylor_order=self.order, verbosity=printer)
+
+                    all_polys = list(itertools.chain(*exp_polys.values()))
+                    all_values = _np.array(list(itertools.chain(*exp_values.values())))
+                    vtape, ctape = compact_polynomial_list(all_polys)
+                    wrt_params = _np.arange(len(edesign.eegs_to_probe))
+
+                    def objective(intrinsic_vec):
+                        predictions = bulk_eval_compact_polynomials(vtape, ctape, intrinsic_vec, all_values.shape)
+                        residuals = predictions - all_values
+                        return residuals.real
+                    
+                    def jacobian(intrinsic_vec):
+                        return bulk_eval_compact_polynomials_derivs(vtape, ctape, wrt_params, intrinsic_vec, (len(all_values), len(edesign.eegs_to_probe)))
+
+                    # SLOW version for debugging:
+                    # def objective(intrinsic_vec):
+                    #     residuals = []
+                    #     for values, polys in zip(exp_values.values(), exp_polys.values()):
+                    #         # evaluate the polynomial at the given intrinsic rates and compare to the expectation values
+                    #         residuals.extend([(v - poly.evaluate(intrinsic_vec)) for v, poly in zip(values, polys)])
+                    #     residuals = _np.array(residuals)
+                    #     assert _np.isreal(residuals).all(), "Residuals should be real!"
+                    #     return residuals.real
+                else:
+                    exp_value_by_circuit = defaultdict(list)
+                    to_measure_by_circuit = defaultdict(list)
+                    for (nq_prep, nq_meas, measure_on), circuits_vs_L in edesign.extrinsic_rate_circuits.items():
+                        for circuit in circuits_vs_L:
+                            fs = ds[circuit].fractions
+                            avg_parity = sum([(-1)**parity(outcome[0], measure_on) * f for outcome, f in fs.items()])
+                            to_measure_by_circuit[circuit].append(measure_on)
+                            exp_value_by_circuit[circuit].append(avg_parity)
+
+                    def objective(mdl_param_vec):
+                        mdl.from_vector(mdl_param_vec)
+                        circuits = list(to_measure_by_circuit.keys())
+                        all_probs = mdl.bulk_probabilities(circuits)
+                        residuals = []
+                        for circuit, qubits_to_measure_list in to_measure_by_circuit.items():
+                            probs = all_probs[circuit]
+                            exp_values = exp_value_by_circuit[circuit]
+                            for to_measure, exp_val in zip(qubits_to_measure_list, exp_values):
+                                predicted_parity = sum([(-1)**parity(outcome[0], to_measure) * p for outcome, p in probs.items()])
+                                residuals.append(predicted_parity - exp_val)
+                        return _np.array(residuals)
+                    
+                local_intrinsic_rates = self._intrinsic_rates_via_least_squares_fit(objective, jacobian, edesign, printer, mdl=mdl)
+            else:
+                raise ValueError(f"Unknown fitting mode '{self.fitting_mode}'!")
+                
+            #extrinsic_coeffs.update(local_extrinsic_coeffs)
             intrinsic_rates.update(local_intrinsic_rates)
 
         if len(jacobians) > 0:
@@ -1250,11 +1505,46 @@ class IdleTomography(_proto.Protocol):
             jac_full = None
 
         return IdleTomographyResults(top_edesign, ds, extrinsic_coeffs, intrinsic_rates, jac_full)
+    
+    def _intrinsic_rates_via_least_squares_fit(self, objective, jacobian, edesign, printer, mdl=None):
+        t1 = time.time()
+        x0 = _np.zeros(len(edesign.eegs_to_probe), 'd')
+        if self.order == 'inf':
+            assert mdl is not None, "Model must be provided for infinite order fitting!"
+
+        if self.initial_intrinsic_rates is not None:                    
+            if self.order == 'inf':  # then assume a GST model was created
+                x0[:] = mdl.to_vector().copy()
+            else:
+                for eeg, val in self.initial_intrinsic_rates.items():
+                    # Note: not all eegs may be in this edesign's eegs_to_probe (may be multiple edesigns)
+                    if LEEL.cast(eeg) in edesign.eegs_to_probe:
+                        idx = edesign.eegs_to_probe.index(LEEL.cast(eeg))
+                        x0[idx] = val
+
+        #test = objective(_np.zeros(len(edesign.eegs_to_probe), 'd'))
+        #print("Test objective call returns shape", test.shape)
+        res = least_squares(objective, x0=x0, jac='2-point' if jacobian is None else jacobian,
+                            bounds=(-0.01, 0.01), verbose=2)
+        if self.order == 'inf': # GST model was used; need to convert model params to intrinsic rates
+            mdl.from_vector(res.x)
+            idleop_coeffs = mdl.operation_blks['layers']['Gidle'].errorgen_coefficients(label_type='local')
+            local_intrinsic_rates = {eeg: idleop_coeffs[eeg] for eeg in edesign.eegs_to_probe}  # ensure same ordering                    
+        else:
+            local_intrinsic_rates = dict(zip(edesign.eegs_to_probe, res.x))
+        printer.log(f"Solved for intrinsic rates in {time.time() - t1:.2f} seconds.\n"
+                    f" Final cost = {res.cost}, optimality = {res.optimality}, success = {res.success}\n"
+                    f" message = {res.message}")
+        return local_intrinsic_rates
 
     @staticmethod
     def compute_extrinsic_coeffs(edesign: IdleTomographyExperimentDesign, ds: DataSet, degree: int, verbosity: int | VerbosityPrinter = 0):
         printer = VerbosityPrinter.create_printer(verbosity)
         extrinsic_coeffs = {}
+        from scipy.optimize import curve_fit
+        from sklearn.linear_model import Lasso
+        from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+        from sklearn.pipeline import Pipeline
 
         for (nq_prep, nq_meas, measure_on), circuits_vs_L in edesign.extrinsic_rate_circuits.items():
             xs = []; ys = []  # for fitting a line to
@@ -1263,9 +1553,48 @@ class IdleTomography(_proto.Protocol):
                 avg_parity = sum([(-1)**parity(outcome[0], measure_on) * f for outcome, f in fs.items()])
                 xs.append(L)
                 ys.append(avg_parity) #- nf_parity)
-            #coeffs = _np.polyfit(xs, ys, deg=degree)
-            #coeffs_inc_order = list(reversed(coeffs[:-1]))  # drop constant term and reverse to get coeffs in order of increasing power of L
-            coeffs_inc_order = _np.polynomial.Polynomial.fit(xs, ys, deg=degree).convert().coef[1:]  # drop constant term, keep in order of increasing power of L
+                        
+            fit_method = "fixed_L0_polyfit" # experimenting with different fitting methods here
+            if fit_method == "polyfit":
+                #coeffs = _np.polyfit(xs, ys, deg=degree); coeffs_inc_order = list(reversed(coeffs[:-1]))  # drop constant term and reverse to get coeffs in order of increasing power of L
+                coeffs_inc_order = _np.polynomial.Polynomial.fit(xs, ys, deg=degree).convert().coef[1:]  # drop constant term, keep in order of increasing power of L
+
+            elif fit_method == "fixed_L0_polyfit":
+                # Maybe cache these?
+                tableau = _get_prep_tableau(nq_prep, edesign.prep_fiducial_map)
+                pauli = _stim.PauliString(nq_meas.identity_except_on_qubits(measure_on).rep)
+                ideal_expectation = eprop.stabilizer_pauli_expectation(tableau, pauli)
+
+                if degree == 1:
+                    def func(x, a):
+                        return ideal_expectation + a * x
+                elif degree == 2:
+                    def func(x, a, b):
+                        return ideal_expectation + a * x + b * x**2
+                elif degree == 3:
+                    def func(x, a, b, c):
+                        return ideal_expectation + a * x + b * x**2 + c * x**3
+                elif degree == 4:
+                    def func(x, a, b, c, d):
+                        return ideal_expectation + a * x + b * x**2 + c * x**3 + d * x**4
+                else:
+                    raise ValueError(f"Unsupported degree {degree} for extrinsic coefficient fitting!")
+                coeffs_inc_order, _ = curve_fit(func, xs, ys)
+
+            elif fit_method == "lasso":
+                model = Pipeline([
+                    ('poly', PolynomialFeatures(degree=degree)),
+                    ('scaler', StandardScaler()),
+                    ('lasso', Lasso(alpha=0.01)),
+                ])
+                model.fit(_np.array(xs).reshape(-1, 1), _np.array(ys))
+                coeffs = model.named_steps['lasso'].coef_
+                means = model.named_steps['scaler'].mean_
+                scales = model.named_steps['scaler'].scale_
+                coeffs_inc_order = (coeffs / scales)[1:]  # rescale coefficients to account for standardization  
+
+            else: 
+                raise ValueError(f"Unknown fit method '{fit_method}' for extrinsic coefficient fitting!")
 
             printer.log(f"    nqubit fidpair: {(nq_prep, nq_meas, measure_on)}: coeffs = {coeffs_inc_order}", 2)
             printer.log(f"     using data => {xs=}, {ys=}", 2)
