@@ -634,11 +634,11 @@ def bulk_load_compact_polynomials(vtape, ctape, keep_compact=False, max_num_vars
     ----------
     vtape : numpy.ndarray
         A 1D array of variable indices that, together with `ctape`, specify an
-        efficient means for evaluating a set of polynoials.
+        efficient means for evaluating a set of polynomials.
 
     ctape : numpy.ndarray
         A 1D array of coefficients that, together with `vtape`, specify an
-        efficient means for evaluating a set of polynoials.
+        efficient means for evaluating a set of polynomials.
 
     keep_compact : bool, optional
         If True the returned list has elements which are (vtape,ctape) tuples
