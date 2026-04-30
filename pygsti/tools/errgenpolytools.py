@@ -609,7 +609,7 @@ def error_generator_taylor_expansion_symbolic_polynomial(errorgen_dict, errorgen
         whatever scaling comes from order of taylor expansion). Each list corresponds to an order
         of the taylor expansion.
     """
-    assert order == 1 or order == 2, "First and second-order symbolic taylor series approximations are currently supported."   
+    #assert order == 1 or order == 2, "First and second-order symbolic taylor series approximations are currently supported."   
  
     if order == 1:
         return [errorgen_dict] #TODO, check if this should be a copy
@@ -641,9 +641,8 @@ def error_generator_taylor_expansion_symbolic_polynomial(errorgen_dict, errorgen
                         composition_errgen_coeffs.append(composition_coeff_poly_product.scalar_mult(rate))
                 
             # aggregate together any overlapping terms into a single dictionary
-            composition_results_dict_keys = {errorgen: None for errorgen in composition_errgen_labels}
             max_num_vars = len(errorgen_to_var_map)
-            composition_results_dict = {errorgen: _Polynomial({}, max_num_vars=max_num_vars) for errorgen in composition_results_dict_keys}
+            composition_results_dict = {errorgen: _Polynomial({}, max_num_vars=max_num_vars) for errorgen in composition_errgen_labels}
             # Accumulate the coefficients contributing to each term.    
             for errorgen, coeff_poly in zip(composition_errgen_labels, composition_errgen_coeffs):
                 composition_results_dict[errorgen] += coeff_poly
