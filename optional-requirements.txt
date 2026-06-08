@@ -11,3 +11,4 @@ cvxopt
 cvxpy
 seaborn
 packaging
+jupyter-server>=2.18.0 # not directly required, pinned by Snyk to avoid a vulnerability
