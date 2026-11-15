@@ -11,3 +11,5 @@ cvxopt
 cvxpy
 seaborn
 packaging
+pillow>=13.0.0 # not directly required, pinned by Snyk to avoid a vulnerability
+soupsieve>=4.0.1 # not directly required, pinned by Snyk to avoid a vulnerability
